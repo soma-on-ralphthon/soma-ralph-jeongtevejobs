@@ -2,7 +2,7 @@
 
 목표:
 `tasks.yaml`을 분석하여 Ralphy 실행 전에 필요한 Python runtime, uv package,
-command, 환경변수, 권한, 실제 터미널/TTY 상태를 점검하고,
+command, 환경변수, 권한, 실제 터미널/TTY, CLIProxyAPI 상태를 점검하고,
 사용자가 재현 가능하게 실행할 preflight script를 만든다.
 
 중요:
@@ -21,13 +21,14 @@ command, 환경변수, 권한, 실제 터미널/TTY 상태를 점검하고,
 - .ralphy/config.yaml
 - `pyproject.toml`, `uv.lock`, `.python-version`
 - `scripts/check.sh`와 project entry point
+- `scripts/install-prerequisites.sh`, `scripts/ralphy.sh`
 - Ruff, pytest, pytest-asyncio, Textual 설정
 - `src/`와 `tests/` 구조
+- `~/.cli-proxy-api/config.yaml`의 존재와 권한. secret 값은 읽거나 출력하지 않음
 - .env.example 계열
-- CI workflow와 `README_v2.md`
+- CI workflow와 `README.md`
 
-`README.md`는 이전 웹 스택의 legacy 문서일 수 있다.
-충돌이 있으면 `PRODUCT.md`, `AGENTS.md`, `README_v2.md`, `pyproject.toml`을 우선한다.
+충돌이 있으면 `PRODUCT.md`, `AGENTS.md`, `README.md`, `pyproject.toml`을 우선한다.
 
 quality script와 project command는 재귀적으로 분석하라.
 
@@ -46,6 +47,7 @@ quality script와 project command는 재귀적으로 분석하라.
 5. runtime 또는 package manager 버전 불일치
 6. 실제 TTY, terminal capability 또는 OS library 누락
 7. 환경변수 또는 파일시스템 권한 문제
+8. CLIProxyAPI 설정, OAuth 인증 또는 localhost:8317 service 문제
 
 `pytest: command not found`, `ruff: command not found` 또는
 `ModuleNotFoundError: textual` 처리 규칙:
@@ -65,7 +67,7 @@ quality script와 project command는 재귀적으로 분석하라.
    - package manager
    - 필수 command와 AI CLI
    - 필수 환경변수 이름
-   - port와 service가 필요하지 않음을 명시
+   - CLIProxyAPI localhost port 8317과 Homebrew service
    - 실제 TTY와 terminal capability 필요 여부
    - quality command
    - 사용자 승인이 필요한 권한 작업
@@ -99,7 +101,7 @@ quality script와 project command는 재귀적으로 분석하라.
 ### plan
 
 * 설치나 시스템 변경 없이 정적 분석만 수행
-* 필요한 설치, 환경변수, TTY/terminal, 권한을 보고
+* 필요한 설치, 환경변수, TTY/terminal, CLIProxyAPI, 권한을 보고
 * manifest 또는 lockfile blocker 탐지
 * `.ralphy/preflight/report.md` 생성
 * blocker가 있으면 non-zero 종료
@@ -120,11 +122,12 @@ quality script와 project command는 재귀적으로 분석하라.
 
 * Git 저장소와 쓰기 권한
 * runtime/package manager 버전
-* Ralphy와 AI CLI command
+* `.tools/bin/ralphy`, `scripts/ralphy.sh`, Claude Code command
+* `cliproxyapi` command, config file, localhost:8317 service
 * manifest/lockfile 일관성
 * project dependency 설치 상태
 * python, uv, pytest, ruff 등 executable과 Textual import
-* 필수 환경변수 이름의 값 존재 여부
+* `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`의 존재 여부. 값은 출력하지 않음
 * 실제 TTY가 필요한 실행과 headless test의 분리
 * UTF-8 locale과 terminal color capability
 * Git user.name/user.email
@@ -145,6 +148,7 @@ quality command는 저장소에서 분석하여 결정하라.
 
 * tasks.yaml
 * `pyproject.toml`과 `uv.lock`
+* `scripts/install-prerequisites.sh`, `scripts/ralphy.sh`
 * .ralphy/config.yaml
 * ralph.environment.json
 * 주요 test/lint 설정
@@ -153,6 +157,7 @@ quality command는 저장소에서 분석하여 결정하라.
 
 * 실행 직전에 verify를 다시 수행
 * verify가 성공하고 fingerprint가 최신일 때만 Ralphy 실행
+* global `ralphy` 대신 저장소의 `scripts/ralphy.sh`를 실행
 * `--` 뒤 argument를 배열로 그대로 전달
 * Ralphy exit code를 그대로 반환
 
@@ -163,7 +168,6 @@ Pilot 예시:
   --yaml tasks.yaml \
   --max-iterations 1 \
   --max-retries 1 \
-  --no-browser \
   --no-commit
 ```
 
@@ -200,7 +204,7 @@ runtime, package manager, quality command, Ralphy engine
 
 ## 검증 결과
 
-dependencies, executables, env, TTY/terminal,
+dependencies, executables, env, TTY/terminal, CLIProxyAPI,
 Ralphy dry-run, quality command, git diff check
 
 ## 다음 명령

@@ -1,1127 +1,263 @@
-아래 순서는 기존의 **기획 → seed scaffold → Ralphy 초기화 → preflight → 기준점 commit → 1-task pilot → 본 실행** 흐름을 그대로 따른 것입니다. 
+# ralphthon-sample
 
-현재 Ralphy 공식 CLI는 `npm install -g ralphy-cli`로 설치하며, `--init`, `--yaml`, `--dry-run`, `--max-iterations`, `--max-retries`, `--no-commit`, `--no-browser`를 지원합니다. npm 버전은 Node.js 18 이상이 필요합니다. ([GitHub][1])
+> 고정 주제: **TUI로 사용자를 킹받게 하는 서비스 만들기**
 
----
+소프트웨어마에스트로 연수생이나 개발자가 간단한 개발 작업을 입력하면, 실행하는 대신 황당한 선행 작업이 계속 늘어나는 **야크 셰이빙 TUI**를 만드는 1시간 Ralphy 파일럿 저장소다.
 
-# 0. 빈 저장소 시작
+브라우저에서 터미널처럼 보이게 만든 웹 UI가 아니다. Python과 Textual로 실제 터미널 안에서 실행하고 키보드로 조작하는 앱을 만든다.
 
-```bash
-cd ~/Dev/Projects
-mkdir my-ralph-project
-cd my-ralph-project
-
-# 이 두 파일이 이미 있어야 함
-ls -l SETUP_PROMPT.md PREFLIGHT.md
-```
-
-```bash
-git init
-git branch -M main
-
-git commit --allow-empty -m "chore: initialize repository"
-
-git add SETUP_PROMPT.md PREFLIGHT.md
-git commit -m "docs: add setup and preflight prompts"
-```
-
-```bash
-git log --oneline --decorate -3
-git status --short
-```
-
-예상:
+## 만들 결과물
 
 ```text
-xxxxxxx docs: add setup and preflight prompts
-xxxxxxx chore: initialize repository
+사용자: 버튼 색상 변경
+         │
+         ├─ 디자인 토큰 전체 재정의
+         ├─ CSS 아키텍처 의사결정 기록 작성
+         └─ 프레임워크 마이그레이션 가능성 검토
+
+분노 게이지  [██████████████░░░░░░] 70%
+예상 퇴근     오늘 → 다음 주 화요일
 ```
 
-Commit 사용자 정보 오류가 날 때만 실행:
+3분 데모의 핵심 흐름은 다음과 같다.
+
+1. `uv run ralphthon-sample`로 실제 TUI를 실행한다.
+2. 간단한 개발 작업을 한 줄 입력하고 Enter를 누른다.
+3. 황당한 선행 작업 3개, 분노 게이지, 예상 퇴근 시간이 동시에 나타난다.
+
+자세한 목표와 성공 기준은 [GOAL_DECLARATION.md](GOAL_DECLARATION.md), 원본 양식은 [GOAL_DECLARATION_TEMPLATE.md](GOAL_DECLARATION_TEMPLATE.md)에 있다.
+
+## TUI가 생소하다면
+
+TUI는 터미널 안에서 계속 실행되며 키 입력에 반응하는 대화형 화면이다. 일반 CLI처럼 결과 한 줄을 출력하고 끝나지 않고, 트리·표·탭·게이지·로그를 한 화면에서 실시간으로 갱신할 수 있다.
+
+개발 워크플로, Kubernetes 운영, 시스템 모니터링, API 테스트, 데이터 분석 등 실제 사례와 공식 스크린샷은 [TUI_REFERENCES.md](TUI_REFERENCES.md)에 정리했다.
+
+## 고정 기술 스택
+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/)
+- [Textual](https://textual.textualize.io/)
+- pytest / pytest-asyncio
+- Ruff
+- 로컬 메모리 또는 JSON 상태
+- 키보드로 조작하는 실제 TUI
+
+사용하지 않는 것:
+
+- JavaScript, TypeScript, Node.js
+- React, Ink, Next.js
+- 브라우저 UI, Playwright, 웹 서버
+- 외부 유료 API를 사용하는 제품 기능
+- 인증, 결제, 배포
+
+## Prerequisites 설치
+
+자동 설치 스크립트는 현재 macOS와 Homebrew를 기준으로 한다. Homebrew가 없다면 먼저 [공식 설치 안내](https://brew.sh/)를 따른다.
+
+OAuth 로그인까지 한 번에 진행하려면:
 
 ```bash
-git config user.name "YOUR_NAME"
-git config user.email "YOUR_EMAIL"
+./scripts/install-prerequisites.sh --login
 ```
 
----
-
-# 1. Claude Code로 제품 기획
+설치와 로컬 설정만 하고 로그인을 나중에 하려면:
 
 ```bash
-claude
+./scripts/install-prerequisites.sh
 ```
 
-Claude Code에 아래 프롬프트를 입력:
+스크립트가 준비하는 항목:
+
+| 항목 | 설치·검증 방식 | 용도 |
+| --- | --- | --- |
+| Git | 시스템 command 확인 | 변경 이력과 Ralphy 작업 기준점 |
+| Python 3.12+ | 기존 Python 확인, 필요하면 Homebrew | Textual 앱 runtime |
+| uv | Homebrew | project dependency와 lockfile 관리 |
+| Claude Code | 기존 command 확인, 필요하면 Homebrew stable cask | 기획, seed, Ralphy 기본 AI engine |
+| Ralphy | 전용 venv에서 `pip install ralphy==4.0.1` | bounded autonomous task 실행 |
+| CLIProxyAPI | Homebrew | Claude/Codex 등의 OAuth provider를 local API로 연결 |
+
+중요: Python 패키지 이름은 `ralphy-cli`가 아니라 **`ralphy`**다. [PyPI 공식 페이지](https://pypi.org/project/ralphy/)의 설치 명령도 `pip install ralphy`이며 Python 3.10+와 Git, AI CLI 하나 이상을 요구한다. 이 저장소는 다른 전역 설치와 충돌하지 않도록 `.tools/ralphy-venv`에 pip 설치하고 `./scripts/ralphy.sh`로 실행한다.
+
+설치 스크립트는 다음 로컬 파일을 만든다.
 
 ```text
-Read SETUP_PROMPT.md and follow it exactly.
-
-Additional constraints:
-
-- Do not read or execute PREFLIGHT.md yet.
-- Do not modify SETUP_PROMPT.md or PREFLIGHT.md.
-- Start by asking only question 1.
-- Continue asking one question at a time.
-- Do not create files until I say "확정".
-
-When creating tasks.yaml, use exactly this top-level structure:
-
-tasks:
-  - title: "T01 - task title"
-    completed: false
-    description: |
-      Task: T01 - task title
-
-      Goal:
-      ...
-
-      Acceptance criteria:
-      - ...
-
-      Verification:
-      - npm run check
-
-Requirements for tasks.yaml:
-
-- Every task must contain title, completed, and description.
-- The first line of description must repeat the task title.
-- All completed values must be false.
-- Do not include project initialization or dependency installation tasks.
-
-Begin with question 1 only.
+.tools/bin/ralphy                         # 저장소 전용 PyPI Ralphy
+~/.cli-proxy-api/config.yaml             # localhost 전용 proxy 설정
+~/.cli-proxy-api/ralphthon.env           # Claude Code 연결 환경변수
 ```
 
-질문에 하나씩 답변합니다.
+`.tools/`와 secret·runtime 파일은 Git에 포함하지 않는다.
 
-마지막 질문까지 합의되면 입력:
+## CLIProxyAPI 설정
 
-```text
-확정
-```
+macOS의 공식 설치 방식은 `brew install cliproxyapi`다. 이 저장소의 스크립트는 다음 안전 기본값으로 설정한다.
 
-파일 생성이 끝나면:
+- `127.0.0.1:8317`에만 bind
+- remote management 비활성화
+- TLS 비활성화: localhost 안에서만 사용
+- 임의의 local API key 생성, 화면에는 출력하지 않음
+- `~/.cli-proxy-api/config.yaml`을 Homebrew service config에 연결
+- 기존 Homebrew config가 있으면 timestamp가 붙은 `.bak`으로 보존
 
-```text
-/exit
-```
-
-Ralphy의 현재 YAML parser는 최상위 `tasks:` 배열을 기대하고, `description`을 실제 agent 작업 본문으로 사용합니다. 
-
----
-
-# 2. 기획 결과 검토 및 commit
+`--login`을 빼고 설치했다면 Claude OAuth를 직접 시작한다.
 
 ```bash
-ls -l \
-  SETUP_PROMPT.md \
-  PREFLIGHT.md \
-  PRODUCT.md \
-  tasks.yaml \
-  AGENTS.md
+cliproxyapi \
+  --config "$HOME/.cli-proxy-api/config.yaml" \
+  --claude-login
 ```
+
+브라우저를 열 수 없는 환경에서는 `--no-browser`를 **CLIProxyAPI 로그인 명령에만** 추가한다. OAuth callback은 로컬 port `54545`를 사용한다.
+
+서비스와 환경변수를 다시 적용한다.
 
 ```bash
-sed -n '1,240p' PRODUCT.md
-sed -n '1,320p' tasks.yaml
-sed -n '1,240p' AGENTS.md
+brew services restart cliproxyapi
+source "$HOME/.cli-proxy-api/ralphthon.env"
 ```
+
+서비스 확인:
 
 ```bash
-# 최상위 tasks 확인
-grep -n '^tasks:' tasks.yaml
-
-# 모든 task 상태 확인
-grep -n 'completed:' tasks.yaml
-
-# true가 하나라도 나오면 중단
-if grep -Eq 'completed:[[:space:]]*true' tasks.yaml; then
-  echo "STOP: completed:true가 존재함"
-else
-  echo "OK: 모든 task가 false"
-fi
+brew services list
+lsof -nP -iTCP:8317 -sTCP:LISTEN
 ```
+
+CLIProxyAPI의 공식 문서:
+
+- [macOS Quick Start](https://help.router-for.me/introduction/quick-start)
+- [Basic Configuration](https://help.router-for.me/configuration/basic)
+- [Claude OAuth login](https://help.router-for.me/configuration/provider/claude-code)
+- [Claude Code client 연결](https://help.router-for.me/agent-client/claude-code)
+- [CLIProxyAPI GitHub](https://github.com/router-for-me/CLIProxyAPI)
+
+## 1시간 파일럿 절차
+
+### 1. 제품 기획
+
+먼저 proxy 환경을 현재 shell에 적용한다.
 
 ```bash
-git diff --check
-git status --short
+source "$HOME/.cli-proxy-api/ralphthon.env"
 ```
 
-예상:
-
-```text
-?? PRODUCT.md
-?? tasks.yaml
-?? AGENTS.md
-```
-
-Commit:
+완성된 기획 프롬프트만 Claude Code에 전달한다.
 
 ```bash
-git add PRODUCT.md tasks.yaml AGENTS.md
-git commit -m "docs: define product and Ralph tasks"
+claude "$(cat SETUP_PROMPTS.md)"
 ```
+
+Claude가 질문을 한 번에 하나씩 한다. 마지막 답변까지 합의한 뒤 정확히 `확정`이라고 입력한다. 그러면 다음 세 파일이 생성된다.
+
+- `PRODUCT.md`
+- `AGENTS.md`
+- `tasks.yaml`
+
+core task가 3~4개, stretch task가 1개 이하인지 확인한다.
+
+### 2. 최소 seed scaffold
+
+제품 기능을 구현하기 전에 실행 가능한 Python TUI 골격과 테스트만 만든다.
 
 ```bash
-git status --short
-git log --oneline --decorate -5
+./scripts/ralphy.sh \
+  --no-commit \
+  --max-retries 1 \
+  "Read PRODUCT.md, tasks.yaml, and AGENTS.md.
+Create only the minimal runnable seed project for the fixed stack.
+Create a real terminal TUI using Python 3.12+, uv, and Textual.
+Create pyproject.toml, uv.lock, a src-layout package, and an executable ./scripts/check.sh.
+Add one placeholder TUI screen, one state-logic smoke test, and one headless Textual smoke test using pytest.
+The check script must run Ruff lint, Ruff format check, and pytest in that order.
+Do not create JavaScript or TypeScript files, a browser UI, web server, or browser test.
+Do not implement tasks.yaml, modify planning files, or commit."
 ```
 
----
-
-# 3. Claude Code로 최소 seed scaffold 생성
-
-Ralphy로 제품 task를 실행하기 전에 최소 실행 가능한 프로젝트를 만듭니다.
+### 3. Ralphy 초기화와 규칙
 
 ```bash
-claude
+./scripts/ralphy.sh --init
+./scripts/ralphy.sh --add-rule "Before coding, read PRODUCT.md and AGENTS.md"
+./scripts/ralphy.sh --add-rule "Work on exactly one task and avoid unrelated refactoring"
+./scripts/ralphy.sh --add-rule "Run ./scripts/check.sh before reporting completion"
+./scripts/ralphy.sh --add-rule "Do not add, remove, or update dependencies"
+./scripts/ralphy.sh --add-rule "Do not weaken or delete tests"
 ```
 
-Claude Code에 입력:
+`.ralphy/config.yaml`에서 test와 lint command, 수정 금지 영역을 확인한다. 최소 금지 대상은 `.env*`, `PRODUCT.md`, `AGENTS.md`, `SETUP_PROMPTS.md`, `PREFLIGHTS.md`, `GOAL_DECLARATION*.md`다.
 
-```text
-Read PRODUCT.md, tasks.yaml, and AGENTS.md.
-
-Create only the minimal runnable seed project required before Ralph/Ralphy execution.
-
-Use the fixed stack:
-
-- TypeScript
-- Next.js App Router
-- npm
-- Local JSON storage unless the planning documents explicitly require SQLite
-- Vitest
-- Playwright
-- ESLint
-
-Create these npm scripts:
-
-- dev
-- build
-- start
-- typecheck
-- lint
-- test:run
-- test:e2e
-- check
-
-`npm run check` must run all non-interactive checks in this order:
-
-1. typecheck
-2. lint
-3. unit tests
-4. build
-5. Playwright smoke test
-
-Requirements:
-
-- Create package.json and package-lock.json.
-- Declare every required dependency in package.json.
-- Do not use global project dependencies.
-- Do not implement any product feature from tasks.yaml.
-- Do not modify PRODUCT.md, tasks.yaml, AGENTS.md, SETUP_PROMPT.md, or PREFLIGHT.md.
-- Follow the directory structure documented in AGENTS.md.
-- Add only one placeholder page proving Next.js runs.
-- Add one minimal unit smoke test.
-- Add one minimal Playwright browser smoke test.
-- Configure Playwright webServer so test:e2e is non-interactive.
-- Do not add authentication, payment, deployment, or external APIs.
-- Do not run Ralphy.
-- Do not commit or push.
-
-You may install the declared dependencies to generate package-lock.json.
-
-Run npm run check if the current environment allows it.
-
-If installation or verification fails, do not hide the error. Report the exact failing command and leave the repository in a diagnosable state.
-```
-
-완료 후:
-
-```text
-/exit
-```
-
-확인:
+### 4. Preflight
 
 ```bash
-ls -l package.json package-lock.json
-cat package.json
-
-git status --short
-git diff --check
+claude -p "$(cat PREFLIGHTS.md)"
 ```
 
-가능하면 실행:
+최종 상태가 `PASS`가 아니면 feature task를 실행하지 않는다.
 
 ```bash
-npm run check
-```
-
-성공하면:
-
-```text
-typecheck PASS
-lint PASS
-unit test PASS
-build PASS
-e2e PASS
-```
-
-실패하더라도 아직 commit하지 않고 다음 preflight 단계로 이동합니다.
-
----
-
-# 4. Ralphy CLI 설치
-
-```bash
-node --version
-npm --version
-claude --version
-```
-
-Node 18 이상 확인:
-
-```bash
-node -e '
-const major = Number(process.versions.node.split(".")[0]);
-console.log("Node:", process.version);
-if (major < 18) {
-  console.error("ERROR: Ralphy requires Node.js 18+");
-  process.exit(1);
-}
-'
-```
-
-Ralphy 설치:
-
-```bash
-npm install -g ralphy-cli
-```
-
-```bash
-command -v ralphy
-ralphy --help | sed -n '1,180p'
-```
-
-예상:
-
-```text
-/usr/.../ralphy
-```
-
-권한 오류가 나면 다음처럼 실행하지 않습니다.
-
-```bash
-# 실행하지 않음
-sudo npm install -g ralphy-cli
-```
-
-사용 중인 `nvm`, `fnm`, `asdf` 등의 사용자 Node 환경을 활성화한 뒤 다시 설치합니다.
-
----
-
-# 5. Scaffold가 생긴 뒤 Ralphy 초기화
-
-```bash
-ralphy --init
-```
-
-확인:
-
-```bash
-find .ralphy -maxdepth 2 -type f -print
-ralphy --config
-```
-
-예상:
-
-```text
-.ralphy/config.yaml
-.ralphy/progress.txt
-```
-
-공통 rule 추가:
-
-```bash
-ralphy --add-rule \
-  "Before coding, read PRODUCT.md and AGENTS.md"
-
-ralphy --add-rule \
-  "Work on exactly one task and avoid unrelated refactoring"
-
-ralphy --add-rule \
-  "Run npm run check before reporting task completion"
-
-ralphy --add-rule \
-  "Do not add, remove, or update dependencies"
-
-ralphy --add-rule \
-  "Do not weaken, skip, delete, or rewrite tests merely to make them pass"
-
-ralphy --add-rule \
-  "Do not modify SETUP_PROMPT.md, PREFLIGHT.md, PRODUCT.md, AGENTS.md, ralph.environment.json, scripts/ralph-preflight.sh, or files under .ralphy/preflight"
-```
-
----
-
-# 6. `.ralphy/config.yaml` 정리
-
-```bash
-claude
-```
-
-Claude Code에 입력:
-
-```text
-Read PRODUCT.md, AGENTS.md, package.json, and .ralphy/config.yaml.
-
-Update only `.ralphy/config.yaml`.
-
-Preserve correctly detected project information.
-
-Set or verify:
-
-project:
-  language: TypeScript
-  framework: Next.js
-  description: Read PRODUCT.md for the product definition.
-
-commands:
-  test: npm run test:run
-  lint: npm run lint
-  build: npm run build
-
-Ensure these rules exist without duplicates:
-
-- Before coding, read PRODUCT.md and AGENTS.md
-- Work on exactly one task and avoid unrelated refactoring
-- Run npm run check before reporting task completion
-- Do not add, remove, or update dependencies
-- Do not weaken, skip, delete, or rewrite tests merely to make them pass
-- Do not modify preflight infrastructure
-
-Set boundaries.never_touch to include:
-
-- SETUP_PROMPT.md
-- PREFLIGHT.md
-- PRODUCT.md
-- AGENTS.md
-- package.json
-- package-lock.json
-- ralph.environment.json
-- scripts/ralph-preflight.sh
-- .ralphy/config.yaml
-- .ralphy/preflight/**
-- .env
-- .env.*
-- node_modules/**
-
-Do not modify tasks.yaml.
-Do not modify any other file.
-Do not run Ralphy.
-Do not commit or push.
-```
-
-완료 후:
-
-```text
-/exit
-```
-
-확인:
-
-```bash
-cat .ralphy/config.yaml
-ralphy --config
-git diff --check
-```
-
----
-
-# 7. Claude Code로 `PREFLIGHT.md` 수행
-
-```bash
-claude
-```
-
-Claude Code에 입력:
-
-```text
-Read PREFLIGHT.md and execute it completely in this repository.
-
-Use:
-
-- PRODUCT.md
-- tasks.yaml
-- AGENTS.md
-- package.json
-- package-lock.json
-- .ralphy/config.yaml
-- all build, test, lint, Playwright, environment, and CI configuration
-
-Requirements:
-
-- Create the preflight infrastructure described in PREFLIGHT.md.
-- Create ralph.environment.json.
-- Create scripts/ralph-preflight.sh.
-- Create .ralphy/preflight/report.md.
-- Run plan, setup, and verify.
-- Do not implement any product task.
-- Do not modify any task completed value.
-- Do not modify PRODUCT.md or AGENTS.md.
-- Do not run an actual Ralphy feature task.
-- Do not commit or push.
-- Do not automatically execute sudo commands.
-- Do not create or expose secrets.
-
-For Ralphy dry-run validation, always use a bounded command:
-
-ralphy --yaml tasks.yaml --dry-run --max-iterations 1 --no-browser --no-commit
-
-Never run an unbounded dry-run.
-
-If a manifest, lockfile, permission, environment variable, authentication, or system dependency issue remains, finish with exactly one of:
-
-- BLOCKED
-- USER ACTION REQUIRED
-
-Only report PASS after the full quality command succeeds.
-```
-
-완료 후:
-
-```text
-/exit
-```
-
-현재 순차 실행 코드에서 dry-run은 task를 완료 처리하지 않으므로, 종료 범위를 제한하기 위해 `--max-iterations 1`을 함께 사용하는 것이 안전합니다. 
-
----
-
-# 8. 사용자가 preflight를 직접 재실행
-
-```bash
-chmod +x scripts/ralph-preflight.sh
 bash -n scripts/ralph-preflight.sh
-```
-
-```bash
-./scripts/ralph-preflight.sh plan tasks.yaml
-```
-
-```bash
-sed -n '1,320p' .ralphy/preflight/report.md
-```
-
-Blocker가 없다면:
-
-```bash
-./scripts/ralph-preflight.sh setup tasks.yaml
 ./scripts/ralph-preflight.sh verify tasks.yaml
 ```
 
-확인:
-
-```bash
-test -f .ralphy/preflight/PASSED \
-  && echo "PREFLIGHT PASS" \
-  || echo "PREFLIGHT NOT PASSED"
-```
-
-예상:
-
-```text
-PREFLIGHT PASS
-```
-
----
-
-# 9. `USER ACTION REQUIRED`가 나온 경우
-
-Privileged script가 생성된 경우:
-
-```bash
-sed -n '1,260p' .ralphy/preflight/privileged-actions.sh
-```
-
-내용을 검토한 후에만:
-
-```bash
-chmod +x .ralphy/preflight/privileged-actions.sh
-./.ralphy/preflight/privileged-actions.sh
-```
-
-필수 환경변수가 있는 경우:
-
-```bash
-cat ralph.environment.json
-```
-
-`.env.example`이 있다면:
-
-```bash
-cp .env.example .env.local
-${EDITOR:-vi} .env.local
-```
-
-실제 secret을 입력한 후:
-
-```bash
-./scripts/ralph-preflight.sh verify tasks.yaml
-```
-
----
-
-# 10. `BLOCKED`가 나온 경우
-
-Report 확인:
-
-```bash
-cat .ralphy/preflight/blockers.txt
-sed -n '1,320p' .ralphy/preflight/report.md
-```
-
-Manifest 또는 lockfile 문제만 수정하도록 Claude Code 실행:
-
-```bash
-claude
-```
-
-입력:
-
-```text
-Read:
-
-- PREFLIGHT.md
-- .ralphy/preflight/report.md
-- .ralphy/preflight/blockers.txt
-- package.json
-- package-lock.json
-- all package scripts and configuration files
-
-Fix only the seed manifest and lockfile blockers identified by preflight.
-
-Requirements:
-
-- Add only dependencies already required by existing scripts or configuration.
-- Keep package.json and package-lock.json consistent.
-- Use npm.
-- Do not install project dependencies globally.
-- Do not implement product features.
-- Do not modify PRODUCT.md, tasks.yaml, AGENTS.md, SETUP_PROMPT.md, or PREFLIGHT.md.
-- Do not modify task completion states.
-- Do not run Ralphy.
-- Run npm install only as needed to update package-lock.json.
-- Run the preflight plan, setup, and verify commands again.
-- Do not commit or push.
-
-Finish with PASS or BLOCKED.
-```
-
-완료 후:
-
-```text
-/exit
-```
-
-다시 검증:
-
-```bash
-./scripts/ralph-preflight.sh plan tasks.yaml
-./scripts/ralph-preflight.sh setup tasks.yaml
-./scripts/ralph-preflight.sh verify tasks.yaml
-```
-
----
-
-# 11. Ralph-ready 기준점 검증
-
-다음 명령이 모두 성공해야 합니다.
-
-```bash
-npm run check
-```
+### 5. Seed 기준점과 dry run
 
 ```bash
 git diff --check
-```
-
-```bash
-test -x node_modules/.bin/tsc
-node_modules/.bin/tsc --version
-```
-
-```bash
-test -f .ralphy/preflight/PASSED
-```
-
-```bash
-grep -n 'completed:' tasks.yaml
-```
-
-모든 task가 아직 `false`인지 확인:
-
-```bash
-TRUE_COUNT="$(
-  grep -Ec \
-    '^[[:space:]]*completed:[[:space:]]*true[[:space:]]*$' \
-    tasks.yaml || true
-)"
-
-echo "completed true: $TRUE_COUNT"
-test "$TRUE_COUNT" -eq 0
-```
-
-예상:
-
-```text
-completed true: 0
-```
-
----
-
-# 12. Ralph-ready 기준점 commit 및 tag
-
-```bash
 git status --short
-git diff --stat
-git diff --check
+git add .
+git commit -m "chore: create ralph-ready TUI seed"
+git tag product-seed
 ```
+
+PyPI Ralphy 4.0.1이 실제로 지원하는 bounded 옵션만 사용한다. npm판에 있는 `--no-browser`는 PyPI판에 없으므로 Ralphy 명령에 넣지 않는다.
 
 ```bash
-git add -A
-```
-
-Commit 전에 반드시 확인:
-
-```bash
-git diff --cached --name-only
-git diff --cached --check
-```
-
-`.env`, `.env.local`, secret, `node_modules`가 stage되어 있으면 제거:
-
-```bash
-git restore --staged .env .env.local 2>/dev/null || true
-git restore --staged node_modules 2>/dev/null || true
-```
-
-Commit:
-
-```bash
-git commit -m "chore: create verified Ralph-ready seed"
-git tag ralph-ready
-```
-
-확인:
-
-```bash
-git status --short
-git log --oneline --decorate -8
-```
-
-예상:
-
-```text
-xxxxxxx (HEAD -> main, tag: ralph-ready)
-        chore: create verified Ralph-ready seed
-```
-
----
-
-# 13. Ralphy dry-run
-
-현재 Ralphy는 기본적으로 auto-commit이 활성화되어 있으므로, 아래 과정에서는 사람이 검증 후 commit하도록 항상 `--no-commit`을 사용합니다. 
-
-```bash
-./scripts/ralph-preflight.sh run tasks.yaml -- \
+./scripts/ralphy.sh \
   --yaml tasks.yaml \
   --dry-run \
   --max-iterations 1 \
-  --max-retries 1 \
-  --no-browser \
   --no-commit
 ```
 
-예상:
-
-```text
-Starting Ralphy with Claude Code
-Tasks remaining: N
-Task 1: ...
-(dry run) Skipped
-Reached max iterations (1)
-
-Completed: 0
-Failed:    0
-```
-
-Dry-run 후 변경이 없어야 합니다.
-
-```bash
-git status --short
-```
-
----
-
-# 14. 첫 task pilot 실행
-
-실행 전 상태:
-
-```bash
-git status --short
-git rev-parse --short HEAD
-grep -n 'completed:' tasks.yaml
-```
-
-Task 파일 백업:
-
-```bash
-mkdir -p .ralphy/preflight
-cp tasks.yaml .ralphy/preflight/tasks.before-pilot.yaml
-```
-
-Pilot:
+### 6. 실제 task 하나만 파일럿
 
 ```bash
 ./scripts/ralph-preflight.sh run tasks.yaml -- \
   --yaml tasks.yaml \
   --max-iterations 1 \
   --max-retries 1 \
-  --no-browser \
   --no-commit
 ```
 
-예상:
-
-```text
-Starting Ralphy with Claude Code
-Tasks remaining: N
-Mode: Sequential
-
-Task 1: ...
-Completed: 1
-Failed:    0
-```
-
----
-
-# 15. Pilot 직후 검증
+실행 후 반드시 사람이 확인한다.
 
 ```bash
-./scripts/ralph-preflight.sh verify tasks.yaml
-```
-
-```bash
-git diff --check
-git status --short
-git diff --stat
-git diff -- tasks.yaml
-```
-
-정확히 한 task만 완료됐는지 확인:
-
-```bash
-TRUE_COUNT="$(
-  grep -Ec \
-    '^[[:space:]]*completed:[[:space:]]*true[[:space:]]*$' \
-    tasks.yaml || true
-)"
-
-FALSE_COUNT="$(
-  grep -Ec \
-    '^[[:space:]]*completed:[[:space:]]*false[[:space:]]*$' \
-    tasks.yaml || true
-)"
-
-echo "completed: $TRUE_COUNT"
-echo "remaining: $FALSE_COUNT"
-
-test "$TRUE_COUNT" -eq 1
-```
-
-예상:
-
-```text
-completed: 1
-remaining: N-1
-```
-
-추가 확인:
-
-```bash
-npm run check
-git diff --check
-```
-
-Pilot commit:
-
-```bash
-git add -A
-git diff --cached --check
-git diff --cached --stat
-
-git commit -m "feat: complete Ralph pilot task"
-git tag ralph-pilot-pass
-```
-
-```bash
-git status --short
-git log --oneline --decorate -8
-```
-
----
-
-# 16. Pilot이 실패한 경우
-
-검증이 실패하면 commit하지 않습니다.
-
-```bash
-git diff --binary > ../ralph-pilot-failed.patch
-git stash push -u -m "failed Ralph pilot"
-```
-
-깨끗한 기준점에서 재시작:
-
-```bash
-git switch -c ralph-pilot-retry ralph-ready
-```
-
-```bash
-./scripts/ralph-preflight.sh verify tasks.yaml
-```
-
-Task 설명이 부족한 것이 원인이라면 `tasks.yaml`을 수정한 뒤:
-
-```bash
-git add tasks.yaml
-git commit -m "docs: clarify failed Ralph task"
-```
-
-```bash
-./scripts/ralph-preflight.sh verify tasks.yaml
-```
-
-Pilot 재실행:
-
-```bash
-./scripts/ralph-preflight.sh run tasks.yaml -- \
-  --yaml tasks.yaml \
-  --max-iterations 1 \
-  --max-retries 1 \
-  --no-browser \
-  --no-commit
-```
-
----
-
-# 17. 본 실행: 두 task씩 수행
-
-남은 task 확인:
-
-```bash
-grep -n 'completed:[[:space:]]*false' tasks.yaml
-```
-
-안전 기준점 기록:
-
-```bash
-SAFE_HEAD="$(git rev-parse HEAD)"
-echo "$SAFE_HEAD"
-```
-
-두 task 실행:
-
-```bash
-./scripts/ralph-preflight.sh run tasks.yaml -- \
-  --yaml tasks.yaml \
-  --max-iterations 2 \
-  --max-retries 2 \
-  --no-browser \
-  --no-commit
-```
-
----
-
-# 18. 각 batch 후 검증 및 commit
-
-```bash
-./scripts/ralph-preflight.sh verify tasks.yaml
-```
-
-```bash
-npm run check
+./scripts/check.sh
 git diff --check
 git status --short
 git diff --stat
 ```
 
-진행 상태:
+검증이 통과했을 때만 커밋한다. 남은 task는 같은 bounded 명령을 반복해 하나씩 진행한다.
 
-```bash
-TRUE_COUNT="$(
-  grep -Ec \
-    '^[[:space:]]*completed:[[:space:]]*true[[:space:]]*$' \
-    tasks.yaml || true
-)"
+## 파일 안내
 
-FALSE_COUNT="$(
-  grep -Ec \
-    '^[[:space:]]*completed:[[:space:]]*false[[:space:]]*$' \
-    tasks.yaml || true
-)"
+| 파일 | 역할 |
+| --- | --- |
+| `README.md` | 설치부터 1-task 파일럿까지의 단일 실행 안내 |
+| `TUI_REFERENCES.md` | TUI 정의, 카테고리별 실제 사례, 공식 이미지 |
+| `GOAL_DECLARATION.md` | 이 프로젝트의 데모와 성공 기준 |
+| `SETUP_PROMPTS.md` | 제품 기획용 완성 프롬프트 |
+| `PREFLIGHTS.md` | Ralphy 실행 환경 검증용 완성 프롬프트 |
+| `scripts/install-prerequisites.sh` | Python, uv, Claude Code, PyPI Ralphy, CLIProxyAPI 설치·설정 |
+| `scripts/ralphy.sh` | 저장소 전용 PyPI Ralphy 실행 wrapper |
 
-echo "completed: $TRUE_COUNT"
-echo "remaining: $FALSE_COUNT"
-```
+## 공식 근거 링크
 
-검증 성공 후 commit:
-
-```bash
-git add -A
-git diff --cached --check
-git diff --cached --stat
-
-git commit -m "feat: complete next Ralph task batch"
-```
-
-다음 batch:
-
-```bash
-./scripts/ralph-preflight.sh run tasks.yaml -- \
-  --yaml tasks.yaml \
-  --max-iterations 2 \
-  --max-retries 2 \
-  --no-browser \
-  --no-commit
-```
-
-다음 과정을 반복합니다.
-
-```text
-run 2 tasks
-→ verify
-→ npm run check
-→ diff 확인
-→ commit
-→ 다음 2 tasks
-```
-
----
-
-# 19. Batch 실패 시 복구
-
-실패 내용을 보존:
-
-```bash
-git diff --binary > ../ralph-batch-failed.patch
-git stash push -u -m "failed Ralph batch"
-```
-
-마지막 성공 commit에서 retry branch 생성:
-
-```bash
-git switch -c "ralph-batch-retry-$(date +%Y%m%d-%H%M%S)" "$SAFE_HEAD"
-```
-
-```bash
-./scripts/ralph-preflight.sh verify tasks.yaml
-```
-
-실패한 task 설명을 보완한 뒤 같은 batch 명령을 다시 실행합니다.
-
----
-
-# 20. 전체 task 완료 확인
-
-```bash
-if grep -n \
-  '^[[:space:]]*completed:[[:space:]]*false[[:space:]]*$' \
-  tasks.yaml; then
-  echo "STOP: 아직 미완료 task가 있음"
-else
-  echo "ALL TASKS COMPLETE"
-fi
-```
-
-예상:
-
-```text
-ALL TASKS COMPLETE
-```
-
----
-
-# 21. 최종 검증
-
-```bash
-./scripts/ralph-preflight.sh verify tasks.yaml
-```
-
-```bash
-npm run check
-git diff --check
-git status --short
-```
-
-```bash
-git log --oneline --decorate -15
-```
-
-마지막 변경사항이 남았다면:
-
-```bash
-git add -A
-git diff --cached --check
-git commit -m "chore: finalize Ralph implementation"
-```
-
-최종 상태:
-
-```bash
-git status --short
-```
-
-예상:
-
-```text
-# 출력 없음
-```
-
-애플리케이션 수동 실행:
-
-```bash
-npm run dev
-```
-
----
-
-# 전체 명령 흐름만 다시 보기
-
-```text
-git init
-→ prompt 파일 commit
-→ claude + SETUP_PROMPT.md
-→ PRODUCT.md / tasks.yaml / AGENTS.md commit
-→ claude로 seed scaffold 생성
-→ ralphy 설치
-→ ralphy --init
-→ .ralphy/config.yaml 설정
-→ claude + PREFLIGHT.md
-→ plan
-→ setup
-→ verify
-→ npm run check
-→ ralph-ready commit/tag
-→ bounded dry-run
-→ 1-task pilot
-→ verify
-→ pilot commit
-→ 2-task batch 반복
-→ 최종 verify
-```
-
-[1]: https://github.com/michaelshimeles/ralphy/blob/main/cli/README.md?utm_source=chatgpt.com "ralphy/cli/README.md at main · michaelshimeles/ralphy · GitHub"
-
-# ralph-start-pack
+- [PyPI Ralphy](https://pypi.org/project/ralphy/)
+- [Claude Code 설치](https://code.claude.com/docs/en/quickstart)
+- [uv 문서](https://docs.astral.sh/uv/)
+- [Textual 문서](https://textual.textualize.io/)
+- [CLIProxyAPI Quick Start](https://help.router-for.me/introduction/quick-start)
