@@ -1,9 +1,9 @@
-# Ralphy 실행 프로세스
+# Ralphy 1시간 TUI 파일럿 프로세스
 
 > 전제: 저장소 루트에 `SETUP_PROMPTS.md`와 `PREFLIGHTS.md`가 있다.
 >
 > 두 파일은 완성된 프롬프트이므로 내용을 그대로 전달하고 추가 지시를 붙이지 않는다.
-> 본 실행에는 태스크 수나 loop 수 제한을 두지 않으며, 실행 환경은 최소 3시간 동안 프로세스를 유지할 수 있어야 한다.
+> 이번 검증은 1시간 안에 마치기 위해 dry run과 실제 태스크를 각각 최대 1개로 제한한다.
 
 ## 1. 제품 기획
 
@@ -13,7 +13,7 @@ git commit --allow-empty -m "chore: initialize repository"
 claude "$(cat SETUP_PROMPTS.md)"
 ```
 
-대화가 끝나면 `PRODUCT.md`, `AGENTS.md`, `tasks.yaml`을 검토한다. `tasks.yaml`의 태스크 개수에는 상한을 두지 않는다.
+대화가 끝나면 `PRODUCT.md`, `AGENTS.md`, `tasks.yaml`을 검토한다. core task가 3~4개이고 stretch task가 1개 이하인지 확인한다.
 
 ## 2. Seed scaffold와 Ralphy 초기화
 
@@ -26,13 +26,17 @@ ralphy \
   --no-browser \
   "Read PRODUCT.md, tasks.yaml, and AGENTS.md.
 Create only the minimal runnable seed project for the fixed stack.
-Add npm run check, one placeholder page, one unit smoke test, and one browser smoke test.
+Create a real terminal TUI using Python 3.12+, uv, and Textual.
+Create pyproject.toml, uv.lock, a src-layout package, and an executable ./scripts/check.sh.
+Add one placeholder TUI screen, one state-logic smoke test, and one headless Textual smoke test using pytest.
+The check script must run Ruff lint, Ruff format check, and pytest in that order.
+Do not create JavaScript or TypeScript files, a browser UI, web server, or browser test.
 Do not implement tasks.yaml, modify planning files, or commit."
 
 ralphy --init
 ralphy --add-rule "Before coding, read PRODUCT.md and AGENTS.md"
 ralphy --add-rule "Work on exactly one task and avoid unrelated refactoring"
-ralphy --add-rule "Run npm run check before reporting completion"
+ralphy --add-rule "Run ./scripts/check.sh before reporting completion"
 ralphy --add-rule "Do not add, remove, or update dependencies"
 ralphy --add-rule "Do not weaken or delete tests"
 ```
@@ -67,12 +71,17 @@ git tag product-seed
 git switch -c "ralph/session-$(date +%Y%m%d-%H%M)"
 git push -u origin HEAD
 
-ralphy --yaml tasks.yaml --dry-run
+ralphy \
+  --yaml tasks.yaml \
+  --dry-run \
+  --max-iterations 1 \
+  --no-browser \
+  --no-commit
 ```
 
-## 5. 3시간 본 실행
+## 5. 1-task 파일럿 실행
 
-터미널, 워크숍 세션 또는 CI job의 허용 실행 시간을 **최소 180분**으로 설정한다. Ralphy 명령에는 task/loop 개수 제한이나 별도 wrapper를 넣지 않는다. 모든 태스크가 먼저 완료되면 정상적으로 조기 종료한다.
+1시간 검증에서는 전체 태스크를 실행하지 않는다. dry run이 통과한 뒤 실제 태스크 하나만 수행하고 결과를 검토한다.
 
 실행 직전에 preflight를 다시 확인한다.
 
@@ -85,21 +94,22 @@ ralphy --yaml tasks.yaml --dry-run
 ```bash
 ralphy \
   --yaml tasks.yaml \
-  --max-retries 2 \
-  --no-browser
+  --max-iterations 1 \
+  --max-retries 1 \
+  --no-browser \
+  --no-commit
 ```
 
-이 실행은 기본 sequential mode로 남은 태스크를 모두 처리한다. `--max-iterations`를 사용하지 않으므로 처리할 태스크 수를 제한하지 않으며, `--no-commit`을 사용하지 않으므로 Ralphy의 task별 자동 커밋을 유지한다.
+이 실행은 기본 sequential mode에서 남은 태스크 중 하나만 처리한다. 자동 커밋은 끄고 사람이 결과를 검토한 뒤 커밋한다.
 
 ## 6. 종료 확인과 GitHub 반영
 
 ```bash
-npm run check
+./scripts/check.sh
 git diff --check
 git status --short
 git log --oneline --decorate product-seed..HEAD
 git push
 ```
 
-3시간 실행 창이 끝났는데 미완료 태스크가 남았다면 현재 변경을 먼저 검토한다. 완료된 커밋을 push한 뒤 동일한 최종 명령을 다시 실행하면 `completed: false`인 다음 태스크부터 이어서 처리한다.
-
+파일럿이 통과하면 현재 변경을 검토하고 커밋한다. 이후 같은 명령을 반복하면 `completed: false`인 다음 태스크부터 하나씩 이어서 처리한다.

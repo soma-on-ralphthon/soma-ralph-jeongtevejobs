@@ -1,8 +1,8 @@
 당신은 이 저장소의 Ralph/Ralphy 실행 환경을 준비하는 Build Engineer다.
 
 목표:
-`tasks.yaml`을 분석하여 Ralphy 실행 전에 필요한 runtime, package, command,
-환경변수, 권한, browser, Docker, port, 인증 상태를 점검하고,
+`tasks.yaml`을 분석하여 Ralphy 실행 전에 필요한 Python runtime, uv package,
+command, 환경변수, 권한, 실제 터미널/TTY 상태를 점검하고,
 사용자가 재현 가능하게 실행할 preflight script를 만든다.
 
 중요:
@@ -12,45 +12,50 @@
 - 자동 commit/push를 하지 마라.
 - secret을 생성하거나 출력하지 마라.
 - 전체 script를 sudo로 실행하지 마라.
-- package.json에 선언되지 않은 dependency를 임의로 설치하지 마라.
+- `pyproject.toml`에 선언되지 않은 dependency를 임의로 설치하지 마라.
 - 제품 기능이나 tasks.yaml의 completed 상태를 수정하지 마라.
 
 다음 파일을 조사하라:
 - tasks.yaml
 - PRODUCT.md, AGENTS.md
 - .ralphy/config.yaml
-- package.json과 lockfile
-- package scripts
-- tsconfig, lint, test, build, Playwright 설정
-- Dockerfile, compose 파일
+- `pyproject.toml`, `uv.lock`, `.python-version`
+- `scripts/check.sh`와 project entry point
+- Ruff, pytest, pytest-asyncio, Textual 설정
+- `src/`와 `tests/` 구조
 - .env.example 계열
-- CI workflow와 README
+- CI workflow와 `README_v2.md`
 
-package script는 재귀적으로 분석하라.
+`README.md`는 이전 웹 스택의 legacy 문서일 수 있다.
+충돌이 있으면 `PRODUCT.md`, `AGENTS.md`, `README_v2.md`, `pyproject.toml`을 우선한다.
+
+quality script와 project command는 재귀적으로 분석하라.
 
 예:
-`npm run check`
-→ typecheck, lint, test, build, test:e2e
-→ tsc, eslint, vitest, next, playwright
-→ 각 command를 제공하는 dependency가 package.json에 선언되어 있는지 확인
+`./scripts/check.sh`
+→ `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest`
+→ ruff, pytest, pytest-asyncio, textual
+→ 각 command와 import를 제공하는 dependency가 `pyproject.toml`에 선언되어 있는지 확인
 
 특히 다음 오류를 구분하라:
 
 1. dependency는 선언되어 있지만 install되지 않음
 2. script가 command를 사용하지만 dependency가 선언되지 않음
-3. devDependency가 제외된 상태로 설치됨
-4. package.json과 lockfile 불일치
+3. dependency group이 제외된 상태로 sync됨
+4. `pyproject.toml`과 `uv.lock` 불일치
 5. runtime 또는 package manager 버전 불일치
-6. browser 또는 OS library 누락
-7. 환경변수, 인증, port 또는 Docker 권한 문제
+6. 실제 TTY, terminal capability 또는 OS library 누락
+7. 환경변수 또는 파일시스템 권한 문제
 
-`tsc: not found` 처리 규칙:
+`pytest: command not found`, `ruff: command not found` 또는
+`ModuleNotFoundError: textual` 처리 규칙:
 
-- package.json에 `typescript`가 선언되어 있다면 lockfile 기반으로 설치한다.
-  npm + package-lock.json이면 `npm ci --include=dev`를 사용한다.
-- 설치 후 `node_modules/.bin/tsc` 존재 여부를 검증한다.
-- `typescript`가 선언되어 있지 않다면 global install이나
-  임의의 `npm install -D typescript`를 실행하지 마라.
+- 필요한 package가 `pyproject.toml`에 선언되어 있다면
+  `uv sync --frozen`으로 lockfile 기반 설치를 수행한다.
+- 설치 후 `.venv/bin/pytest`, `.venv/bin/ruff`와
+  `uv run python -c "import textual"`을 검증한다.
+- 필요한 package가 선언되어 있지 않다면 global install이나
+  임의의 `uv add` 또는 `pip install`을 실행하지 마라.
 - 이 경우 seed manifest BLOCKER로 보고하고 중단하라.
 
 다음 파일을 생성하라:
@@ -60,8 +65,8 @@ package script는 재귀적으로 분석하라.
    - package manager
    - 필수 command와 AI CLI
    - 필수 환경변수 이름
-   - port와 service
-   - Docker/Playwright 필요 여부
+   - port와 service가 필요하지 않음을 명시
+   - 실제 TTY와 terminal capability 필요 여부
    - quality command
    - 사용자 승인이 필요한 권한 작업
 
@@ -74,7 +79,7 @@ package script는 재귀적으로 분석하라.
 ./scripts/ralph-preflight.sh setup tasks.yaml
 ./scripts/ralph-preflight.sh verify tasks.yaml
 ./scripts/ralph-preflight.sh run tasks.yaml -- <ralphy options>
-````
+```
 
 스크립트 요구사항:
 
@@ -94,7 +99,7 @@ package script는 재귀적으로 분석하라.
 ### plan
 
 * 설치나 시스템 변경 없이 정적 분석만 수행
-* 필요한 설치, 환경변수, port, service, 권한을 보고
+* 필요한 설치, 환경변수, TTY/terminal, 권한을 보고
 * manifest 또는 lockfile blocker 탐지
 * `.ralphy/preflight/report.md` 생성
 * blocker가 있으면 non-zero 종료
@@ -103,13 +108,11 @@ package script는 재귀적으로 분석하라.
 
 * 먼저 plan 수행
 * blocker가 없을 때만 deterministic install 수행
-* npm + package-lock.json: `npm ci --include=dev`
-* pnpm/yarn/bun은 해당 lockfile의 frozen install 사용
+* uv + uv.lock: `uv sync --frozen`
 * manifest와 lockfile을 임의로 변경하지 않음
-* 필요한 Playwright browser는 local dependency가 있을 때만 설치
 * sudo가 필요한 명령은 자동 실행하지 말고
   `.ralphy/preflight/privileged-actions.sh`에 작성
-* secret 입력이나 browser login은 사용자 작업으로 남김
+* secret 입력이나 외부 인증은 사용자 작업으로 남김
 
 ### verify
 
@@ -120,11 +123,10 @@ package script는 재귀적으로 분석하라.
 * Ralphy와 AI CLI command
 * manifest/lockfile 일관성
 * project dependency 설치 상태
-* tsc, eslint, vitest, next, playwright 등 local executable
+* python, uv, pytest, ruff 등 executable과 Textual import
 * 필수 환경변수 이름의 값 존재 여부
-* port 가용성
-* Docker daemon/socket 접근
-* Playwright browser
+* 실제 TTY가 필요한 실행과 headless test의 분리
+* UTF-8 locale과 terminal color capability
 * Git user.name/user.email
 * `.ralphy/config.yaml`
 * 가능한 경우 Ralphy dry-run
@@ -132,7 +134,7 @@ package script는 재귀적으로 분석하라.
 * `git diff --check`
 
 quality command는 저장소에서 분석하여 결정하라.
-`npm run check`가 정의되어 있다면 반드시 실행하라.
+`./scripts/check.sh`가 정의되어 있다면 반드시 실행하라.
 
 검증 성공 시:
 
@@ -142,10 +144,10 @@ quality command는 저장소에서 분석하여 결정하라.
 다음 파일이 변경되면 기존 PASS를 무효화하라:
 
 * tasks.yaml
-* package.json과 lockfile
+* `pyproject.toml`과 `uv.lock`
 * .ralphy/config.yaml
 * ralph.environment.json
-* 주요 test/build 설정
+* 주요 test/lint 설정
 
 ### run
 
@@ -161,7 +163,8 @@ Pilot 예시:
   --yaml tasks.yaml \
   --max-iterations 1 \
   --max-retries 1 \
-  --no-browser
+  --no-browser \
+  --no-commit
 ```
 
 작업 순서:
@@ -197,7 +200,7 @@ runtime, package manager, quality command, Ralphy engine
 
 ## 검증 결과
 
-dependencies, executables, env, ports, Docker/Playwright,
+dependencies, executables, env, TTY/terminal,
 Ralphy dry-run, quality command, git diff check
 
 ## 다음 명령
@@ -211,4 +214,3 @@ PASS이면 preflight wrapper를 이용한 pilot 명령
 모든 검증이 통과하기 전에는 실제 feature task를 실행하지 마라.
 
 이제 작업을 시작하라.
-
