@@ -2,7 +2,7 @@
 
 목표:
 `tasks.yaml`을 분석하여 Ralphy 실행 전에 필요한 Python runtime, uv package,
-command, 환경변수, 권한, 실제 터미널/TTY, CLIProxyAPI 상태를 점검하고,
+command, 환경변수, 권한, 실제 터미널/TTY, 선택한 Claude/Codex engine과 CLIProxyAPI 상태를 점검하고,
 사용자가 재현 가능하게 실행할 preflight script를 만든다.
 
 중요:
@@ -22,6 +22,7 @@ command, 환경변수, 권한, 실제 터미널/TTY, CLIProxyAPI 상태를 점�
 - `pyproject.toml`, `uv.lock`, `.python-version`
 - `scripts/check.sh`와 project entry point
 - `scripts/install-prerequisites.sh`, `scripts/ralphy.sh`
+- `.tools/provider`와 선택한 engine 설정. secret 값은 읽거나 출력하지 않음
 - Ruff, pytest, pytest-asyncio, Textual 설정
 - `src/`와 `tests/` 구조
 - `~/.cli-proxy-api/config.yaml`의 존재와 권한. secret 값은 읽거나 출력하지 않음
@@ -47,7 +48,7 @@ quality script와 project command는 재귀적으로 분석하라.
 5. runtime 또는 package manager 버전 불일치
 6. 실제 TTY, terminal capability 또는 OS library 누락
 7. 환경변수 또는 파일시스템 권한 문제
-8. CLIProxyAPI 설정, OAuth 인증 또는 localhost:8317 service 문제
+8. 선택한 Claude/Codex command, CLIProxyAPI 설정, provider OAuth 인증 또는 localhost:8317 service 문제
 
 `pytest: command not found`, `ruff: command not found` 또는
 `ModuleNotFoundError: textual` 처리 규칙:
@@ -65,8 +66,8 @@ quality script와 project command는 재귀적으로 분석하라.
 1. `ralph.environment.json`
    - runtime 최소 버전
    - package manager
-   - 필수 command와 AI CLI
-   - 필수 환경변수 이름
+   - 필수 command와 `.tools/provider`가 선택한 AI CLI
+   - Claude면 `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`; Codex면 프로젝트 전용 `CODEX_HOME` 설정
    - CLIProxyAPI localhost port 8317과 Homebrew service
    - 실제 TTY와 terminal capability 필요 여부
    - quality command
@@ -122,12 +123,17 @@ quality script와 project command는 재귀적으로 분석하라.
 
 * Git 저장소와 쓰기 권한
 * runtime/package manager 버전
-* `.tools/bin/ralphy`, `scripts/ralphy.sh`, Claude Code command
+* `.tools/bin/ralphy`, `scripts/ralphy.sh`, `.tools/provider`
+* provider가 `claude`면 Claude Code command와 `~/.cli-proxy-api/ralphthon-claude.env`
+* provider가 `codex`면 Codex command와 `.tools/codex-home/config.toml`, `auth.json`
+* provider가 `both`면 Claude와 Codex 양쪽을 검증하고, 실제 pilot engine을 명시하도록 요구
+* provider가 `skip`이면 AI CLI와 OAuth가 준비되지 않은 상태를 USER ACTION REQUIRED로 보고
 * `cliproxyapi` command, config file, localhost:8317 service
 * manifest/lockfile 일관성
 * project dependency 설치 상태
 * python, uv, pytest, ruff 등 executable과 Textual import
-* `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`의 존재 여부. 값은 출력하지 않음
+* Claude 선택 시 wrapper가 적용하는 `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`의 존재 여부. 값은 출력하지 않음
+* Codex 선택 시 wrapper가 적용하는 프로젝트 전용 `CODEX_HOME`과 local proxy credential의 존재·권한. 값은 출력하지 않음
 * 실제 TTY가 필요한 실행과 headless test의 분리
 * UTF-8 locale과 terminal color capability
 * Git user.name/user.email
@@ -149,6 +155,7 @@ quality command는 저장소에서 분석하여 결정하라.
 * tasks.yaml
 * `pyproject.toml`과 `uv.lock`
 * `scripts/install-prerequisites.sh`, `scripts/ralphy.sh`
+* `.tools/provider`
 * .ralphy/config.yaml
 * ralph.environment.json
 * 주요 test/lint 설정
@@ -165,11 +172,14 @@ Pilot 예시:
 
 ```bash
 ./scripts/ralph-preflight.sh run tasks.yaml -- \
+  --claude \
   --yaml tasks.yaml \
   --max-iterations 1 \
   --max-retries 1 \
   --no-commit
 ```
+
+Codex를 선택했다면 `--claude`를 `--codex`로 바꿔라.
 
 작업 순서:
 
@@ -192,7 +202,7 @@ PASS / BLOCKED / USER ACTION REQUIRED
 
 ## 감지한 환경
 
-runtime, package manager, quality command, Ralphy engine
+runtime, package manager, quality command, 선택한 Ralphy engine
 
 ## 수행한 작업
 

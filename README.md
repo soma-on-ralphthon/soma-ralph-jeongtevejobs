@@ -45,7 +45,7 @@ TUI는 터미널 안에서 계속 실행되며 키 입력에 반응하는 대화
 
 사용하지 않는 것:
 
-- JavaScript, TypeScript, Node.js
+- JavaScript, TypeScript, Node.js 기반의 **제품 코드**
 - React, Ink, Next.js
 - 브라우저 UI, Playwright, 웹 서버
 - 외부 유료 API를 사용하는 제품 기능
@@ -53,19 +53,29 @@ TUI는 터미널 안에서 계속 실행되며 키 입력에 반응하는 대화
 
 ## Prerequisites 설치
 
-자동 설치 스크립트는 현재 macOS와 Homebrew를 기준으로 한다. Homebrew가 없다면 먼저 [공식 설치 안내](https://brew.sh/)를 따른다.
+자동 설치 스크립트는 현재 macOS와 Homebrew를 기준으로 한다. Homebrew가 없다면 먼저 [공식 설치 안내](https://brew.sh/)를 따른다. 사용할 AI provider를 반드시 하나 고른다.
 
-OAuth 로그인까지 한 번에 진행하려면:
-
-```bash
-./scripts/install-prerequisites.sh --login
-```
-
-설치와 로컬 설정만 하고 로그인을 나중에 하려면:
+Claude Code를 사용할 때:
 
 ```bash
-./scripts/install-prerequisites.sh
+./scripts/install-prerequisites.sh --provider claude --login
 ```
+
+Codex를 사용할 때:
+
+```bash
+./scripts/install-prerequisites.sh --provider codex --login
+```
+
+둘 다 준비하거나 OAuth를 나중에 할 수도 있다.
+
+```bash
+./scripts/install-prerequisites.sh --provider both --login
+./scripts/install-prerequisites.sh --provider claude
+./scripts/install-prerequisites.sh --provider skip
+```
+
+`--login`을 붙였을 때만 브라우저 OAuth가 시작된다. `skip`은 Python, uv, Ralphy, CLIProxyAPI와 로컬 설정만 준비하고 AI CLI 설치·OAuth는 생략한다.
 
 스크립트가 준비하는 항목:
 
@@ -74,7 +84,7 @@ OAuth 로그인까지 한 번에 진행하려면:
 | Git | 시스템 command 확인 | 변경 이력과 Ralphy 작업 기준점 |
 | Python 3.12+ | 기존 Python 확인, 필요하면 Homebrew | Textual 앱 runtime |
 | uv | Homebrew | project dependency와 lockfile 관리 |
-| Claude Code | 기존 command 확인, 필요하면 Homebrew stable cask | 기획, seed, Ralphy 기본 AI engine |
+| Claude Code 또는 Codex | `--provider` 선택에 따라 Homebrew cask | 기획, seed, Ralphy AI engine |
 | Ralphy | 전용 venv에서 `pip install ralphy==4.0.1` | bounded autonomous task 실행 |
 | CLIProxyAPI | Homebrew | Claude/Codex 등의 OAuth provider를 local API로 연결 |
 
@@ -85,12 +95,37 @@ OAuth 로그인까지 한 번에 진행하려면:
 ```text
 .tools/bin/ralphy                         # 저장소 전용 PyPI Ralphy
 ~/.cli-proxy-api/config.yaml             # localhost 전용 proxy 설정
-~/.cli-proxy-api/ralphthon.env           # Claude Code 연결 환경변수
+~/.cli-proxy-api/ralphthon-claude.env    # Claude 연결 환경변수
+.tools/codex-home/                       # Codex 전용 proxy 설정과 local key
+.tools/provider                          # 설치 때 선택한 기본 engine
 ```
 
-`.tools/`와 secret·runtime 파일은 Git에 포함하지 않는다.
+`.tools/`와 secret·runtime 파일은 Git에 포함하지 않는다. Codex 설정은 프로젝트 전용이므로 사용자의 기존 `~/.codex/config.toml`을 덮어쓰지 않는다.
+
+### 다른 사람이 이 저장소로 시작할 때
+
+가능하다. 다만 현재 자동 설치 대상은 **macOS + Homebrew**이며, private 저장소라면 먼저 GitHub 접근 권한이 있어야 한다. 저장소를 clone한 뒤 각자 아래 두 명령 중 하나를 실행하고, 열린 브라우저에서 **자기 AI 계정**으로 로그인하면 된다.
+
+```bash
+git clone https://github.com/sueelly/ralphthon-sample.git
+cd ralphthon-sample
+
+# 둘 중 하나
+./scripts/install-prerequisites.sh --provider claude --login
+./scripts/install-prerequisites.sh --provider codex --login
+```
+
+OAuth 파일과 `.tools/`는 사람마다 로컬에서 새로 만들어진다. 다른 사람의 credential이나 생성된 `.tools/`를 복사하면 안 된다. 이 저장소는 아직 완성 앱이 아니라 **기획부터 1시간 파일럿을 진행하는 시작점**이므로, 설치 다음에는 아래 `1시간 파일럿 절차`를 순서대로 따른다.
 
 ## CLIProxyAPI 설정
+
+여기서 OAuth는 **이 TUI 서비스의 사용자 로그인도, GitHub 로그인도 아니다.** CLIProxyAPI가 사용자의 Claude Code 계정 또는 ChatGPT/Codex 계정을 upstream 모델 provider로 사용할 수 있도록 받는 권한이다.
+
+```text
+Ralphy → Claude Code 또는 Codex CLI → localhost CLIProxyAPI → 선택한 모델 계정
+```
+
+따라서 각 참여자는 자기 계정으로 한 번 직접 로그인해야 하며 OAuth credential은 Git으로 공유하지 않는다. Claude를 고르면 `--claude-login`, Codex를 고르면 `--codex-login`이 실행된다.
 
 macOS의 공식 설치 방식은 `brew install cliproxyapi`다. 이 저장소의 스크립트는 다음 안전 기본값으로 설정한다.
 
@@ -101,21 +136,26 @@ macOS의 공식 설치 방식은 `brew install cliproxyapi`다. 이 저장소의
 - `~/.cli-proxy-api/config.yaml`을 Homebrew service config에 연결
 - 기존 Homebrew config가 있으면 timestamp가 붙은 `.bak`으로 보존
 
-`--login`을 빼고 설치했다면 Claude OAuth를 직접 시작한다.
+`--login`을 빼고 설치했다면 선택한 provider의 OAuth를 직접 시작한다.
 
 ```bash
+# Claude Code 계정
 cliproxyapi \
   --config "$HOME/.cli-proxy-api/config.yaml" \
   --claude-login
+
+# ChatGPT/Codex 계정
+cliproxyapi \
+  --config "$HOME/.cli-proxy-api/config.yaml" \
+  --codex-login
 ```
 
-브라우저를 열 수 없는 환경에서는 `--no-browser`를 **CLIProxyAPI 로그인 명령에만** 추가한다. OAuth callback은 로컬 port `54545`를 사용한다.
+브라우저를 열 수 없는 환경에서는 `--no-browser`를 **CLIProxyAPI 로그인 명령에만** 추가한다. Claude callback은 local port `54545`, Codex callback은 local port `1455`를 사용한다.
 
-서비스와 환경변수를 다시 적용한다.
+서비스를 다시 시작한다. `scripts/ralphy.sh`는 선택한 engine에 맞춰 Claude 환경변수 또는 프로젝트 전용 `CODEX_HOME`을 자동 적용한다.
 
 ```bash
 brew services restart cliproxyapi
-source "$HOME/.cli-proxy-api/ralphthon.env"
 ```
 
 서비스 확인:
@@ -131,25 +171,26 @@ CLIProxyAPI의 공식 문서:
 - [Basic Configuration](https://help.router-for.me/configuration/basic)
 - [Claude OAuth login](https://help.router-for.me/configuration/provider/claude-code)
 - [Claude Code client 연결](https://help.router-for.me/agent-client/claude-code)
+- [Codex OAuth login](https://help.router-for.me/configuration/provider/codex)
+- [Codex client 연결](https://help.router-for.me/agent-client/codex)
 - [CLIProxyAPI GitHub](https://github.com/router-for-me/CLIProxyAPI)
 
 ## 1시간 파일럿 절차
 
 ### 1. 제품 기획
 
-먼저 proxy 환경을 현재 shell에 적용한다.
+설치 때 고른 agent로 완성된 기획 프롬프트를 연다. 둘 중 하나만 실행한다.
 
 ```bash
-source "$HOME/.cli-proxy-api/ralphthon.env"
-```
-
-완성된 기획 프롬프트만 Claude Code에 전달한다.
-
-```bash
+# Claude
+source "$HOME/.cli-proxy-api/ralphthon-claude.env"
 claude "$(cat SETUP_PROMPTS.md)"
+
+# Codex
+CODEX_HOME="$PWD/.tools/codex-home" codex "$(cat SETUP_PROMPTS.md)"
 ```
 
-Claude가 질문을 한 번에 하나씩 한다. 마지막 답변까지 합의한 뒤 정확히 `확정`이라고 입력한다. 그러면 다음 세 파일이 생성된다.
+Agent가 질문을 한 번에 하나씩 한다. 마지막 답변까지 합의한 뒤 정확히 `확정`이라고 입력한다. 그러면 다음 세 파일이 생성된다.
 
 - `PRODUCT.md`
 - `AGENTS.md`
@@ -163,6 +204,7 @@ core task가 3~4개, stretch task가 1개 이하인지 확인한다.
 
 ```bash
 ./scripts/ralphy.sh \
+  --claude \
   --no-commit \
   --max-retries 1 \
   "Read PRODUCT.md, tasks.yaml, and AGENTS.md.
@@ -174,6 +216,8 @@ The check script must run Ruff lint, Ruff format check, and pytest in that order
 Do not create JavaScript or TypeScript files, a browser UI, web server, or browser test.
 Do not implement tasks.yaml, modify planning files, or commit."
 ```
+
+Codex를 골랐다면 위 명령의 `--claude`만 `--codex`로 바꾼다. 이후 모든 Ralphy 실행도 같은 flag를 쓴다. flag를 생략하면 설치 때 선택한 provider가 기본값이며, `both`의 기본값은 Claude다.
 
 ### 3. Ralphy 초기화와 규칙
 
@@ -191,7 +235,12 @@ Do not implement tasks.yaml, modify planning files, or commit."
 ### 4. Preflight
 
 ```bash
+# Claude
+source "$HOME/.cli-proxy-api/ralphthon-claude.env"
 claude -p "$(cat PREFLIGHTS.md)"
+
+# Codex
+CODEX_HOME="$PWD/.tools/codex-home" codex exec - < PREFLIGHTS.md
 ```
 
 최종 상태가 `PASS`가 아니면 feature task를 실행하지 않는다.
@@ -215,6 +264,7 @@ PyPI Ralphy 4.0.1이 실제로 지원하는 bounded 옵션만 사용한다. npm�
 
 ```bash
 ./scripts/ralphy.sh \
+  --claude \
   --yaml tasks.yaml \
   --dry-run \
   --max-iterations 1 \
@@ -225,6 +275,7 @@ PyPI Ralphy 4.0.1이 실제로 지원하는 bounded 옵션만 사용한다. npm�
 
 ```bash
 ./scripts/ralph-preflight.sh run tasks.yaml -- \
+  --claude \
   --yaml tasks.yaml \
   --max-iterations 1 \
   --max-retries 1 \
@@ -251,13 +302,14 @@ git diff --stat
 | `GOAL_DECLARATION.md` | 이 프로젝트의 데모와 성공 기준 |
 | `SETUP_PROMPTS.md` | 제품 기획용 완성 프롬프트 |
 | `PREFLIGHTS.md` | Ralphy 실행 환경 검증용 완성 프롬프트 |
-| `scripts/install-prerequisites.sh` | Python, uv, Claude Code, PyPI Ralphy, CLIProxyAPI 설치·설정 |
-| `scripts/ralphy.sh` | 저장소 전용 PyPI Ralphy 실행 wrapper |
+| `scripts/install-prerequisites.sh` | Python, uv, 선택한 AI CLI, PyPI Ralphy, CLIProxyAPI 설치·설정 |
+| `scripts/ralphy.sh` | 선택한 Claude/Codex proxy 환경을 적용하는 Ralphy wrapper |
 
 ## 공식 근거 링크
 
 - [PyPI Ralphy](https://pypi.org/project/ralphy/)
 - [Claude Code 설치](https://code.claude.com/docs/en/quickstart)
+- [Codex CLI 설치](https://learn.chatgpt.com/docs/codex/cli)
 - [uv 문서](https://docs.astral.sh/uv/)
 - [Textual 문서](https://textual.textualize.io/)
 - [CLIProxyAPI Quick Start](https://help.router-for.me/introduction/quick-start)

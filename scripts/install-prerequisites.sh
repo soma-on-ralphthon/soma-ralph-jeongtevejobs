@@ -8,18 +8,28 @@ readonly TOOLS_DIR="${PROJECT_ROOT}/.tools"
 readonly RALPHY_VENV="${TOOLS_DIR}/ralphy-venv"
 readonly RALPHY_BIN="${TOOLS_DIR}/bin/ralphy"
 readonly RALPHY_VERSION="${RALPHY_VERSION:-4.0.1}"
+readonly PROVIDER_FILE="${TOOLS_DIR}/provider"
+readonly CODEX_HOME_DIR="${TOOLS_DIR}/codex-home"
 readonly PROXY_DIR="${HOME}/.cli-proxy-api"
 readonly PROXY_CONFIG="${PROXY_DIR}/config.yaml"
-readonly PROXY_ENV="${PROXY_DIR}/ralphthon.env"
+readonly CLAUDE_PROXY_ENV="${PROXY_DIR}/ralphthon-claude.env"
 
+PROVIDER=""
 LOGIN_AFTER_INSTALL=false
 
 usage() {
   printf '%s\n' \
-    "Usage: $0 [--login]" \
+    "Usage: $0 --provider <claude|codex|both|skip> [--login]" \
     "" \
     "Installs the macOS prerequisites for ralphthon-sample." \
-    "  --login  Start CLIProxyAPI's interactive Claude OAuth login after setup."
+    "  --provider  Choose which AI CLI and CLIProxyAPI provider to prepare." \
+    "  --login     Start the selected provider's interactive OAuth login." \
+    "" \
+    "Examples:" \
+    "  $0 --provider claude --login" \
+    "  $0 --provider codex --login" \
+    "  $0 --provider both" \
+    "  $0 --provider skip"
 }
 
 die() {
@@ -33,6 +43,14 @@ note() {
 
 while (($# > 0)); do
   case "$1" in
+    --provider)
+      (($# >= 2)) || die "--provider requires a value"
+      PROVIDER="$2"
+      shift
+      ;;
+    --provider=*)
+      PROVIDER="${1#*=}"
+      ;;
     --login)
       LOGIN_AFTER_INSTALL=true
       ;;
@@ -47,6 +65,20 @@ while (($# > 0)); do
   esac
   shift
 done
+
+[[ -n "${PROVIDER}" ]] || {
+  usage >&2
+  die "choose --provider claude, codex, both, or skip"
+}
+
+case "${PROVIDER}" in
+  claude|codex|both|skip) ;;
+  *) die "unsupported provider: ${PROVIDER}" ;;
+esac
+
+if [[ "${PROVIDER}" == "skip" && "${LOGIN_AFTER_INSTALL}" == true ]]; then
+  die "--login cannot be combined with --provider skip"
+fi
 
 if [[ "${EUID}" -eq 0 ]]; then
   die "run this script as your normal user, not root"
@@ -72,10 +104,23 @@ if ! command -v uv >/dev/null 2>&1; then
   brew install uv
 fi
 
-if ! command -v claude >/dev/null 2>&1; then
-  note "Installing Claude Code stable channel"
-  brew install --cask claude-code
-fi
+case "${PROVIDER}" in
+  claude|both)
+    if ! command -v claude >/dev/null 2>&1; then
+      note "Installing Claude Code stable channel"
+      brew install --cask claude-code
+    fi
+    ;;
+esac
+
+case "${PROVIDER}" in
+  codex|both)
+    if ! command -v codex >/dev/null 2>&1; then
+      note "Installing Codex CLI"
+      brew install --cask codex
+    fi
+    ;;
+esac
 
 if ! command -v cliproxyapi >/dev/null 2>&1; then
   note "Installing CLIProxyAPI"
@@ -134,18 +179,51 @@ ln -sfn "${PROXY_CONFIG}" "${brew_config}"
 
 old_umask="$(umask)"
 umask 077
-printf 'export ANTHROPIC_BASE_URL=%q\n' 'http://127.0.0.1:8317' > "${PROXY_ENV}"
-printf 'export ANTHROPIC_AUTH_TOKEN=%q\n' "${proxy_api_key}" >> "${PROXY_ENV}"
-printf 'export RALPHY_BIN=%q\n' "${RALPHY_BIN}" >> "${PROXY_ENV}"
+printf 'export ANTHROPIC_BASE_URL=%q\n' 'http://127.0.0.1:8317' > "${CLAUDE_PROXY_ENV}"
+printf 'export ANTHROPIC_AUTH_TOKEN=%q\n' "${proxy_api_key}" >> "${CLAUDE_PROXY_ENV}"
+printf 'export RALPHY_BIN=%q\n' "${RALPHY_BIN}" >> "${CLAUDE_PROXY_ENV}"
+
+mkdir -p "${CODEX_HOME_DIR}"
+printf '%s\n' \
+  'model_provider = "cliproxyapi"' \
+  'model = "gpt-5.6-sol"' \
+  'model_reasoning_effort = "high"' \
+  '' \
+  '[model_providers.cliproxyapi]' \
+  'name = "cliproxyapi"' \
+  'base_url = "http://127.0.0.1:8317/v1"' \
+  'wire_api = "responses"' \
+  'http_headers = { "X-OpenAI-Actor-Authorization" = "local-proxy" }' > "${CODEX_HOME_DIR}/config.toml"
+printf '{\n  "OPENAI_API_KEY": "%s"\n}\n' "${proxy_api_key}" > "${CODEX_HOME_DIR}/auth.json"
+printf '%s\n' "${PROVIDER}" > "${PROVIDER_FILE}"
 umask "${old_umask}"
-chmod 600 "${PROXY_CONFIG}" "${PROXY_ENV}"
+chmod 600 \
+  "${PROXY_CONFIG}" \
+  "${CLAUDE_PROXY_ENV}" \
+  "${CODEX_HOME_DIR}/config.toml" \
+  "${CODEX_HOME_DIR}/auth.json" \
+  "${PROVIDER_FILE}"
 
 note "Starting CLIProxyAPI as a Homebrew service"
 brew services restart cliproxyapi
 
 if [[ "${LOGIN_AFTER_INSTALL}" == true ]]; then
-  note "Starting interactive Claude OAuth login"
-  cliproxyapi --config "${PROXY_CONFIG}" --claude-login
+  case "${PROVIDER}" in
+    claude)
+      note "Starting interactive Claude Code provider OAuth login"
+      cliproxyapi --config "${PROXY_CONFIG}" --claude-login
+      ;;
+    codex)
+      note "Starting interactive ChatGPT/Codex provider OAuth login"
+      cliproxyapi --config "${PROXY_CONFIG}" --codex-login
+      ;;
+    both)
+      note "Starting interactive Claude Code provider OAuth login"
+      cliproxyapi --config "${PROXY_CONFIG}" --claude-login
+      note "Starting interactive ChatGPT/Codex provider OAuth login"
+      cliproxyapi --config "${PROXY_CONFIG}" --codex-login
+      ;;
+  esac
   brew services restart cliproxyapi
 fi
 
@@ -153,17 +231,26 @@ note "Installed versions"
 "${python_bin}" --version
 uv --version
 "${RALPHY_BIN}" --version
-claude --version
+case "${PROVIDER}" in
+  claude) claude --version ;;
+  codex) codex --version ;;
+  both)
+    claude --version
+    codex --version
+    ;;
+  skip) note "AI CLI installation skipped" ;;
+esac
 brew list --versions cliproxyapi
 
 printf '\n%s\n' \
   "Installation complete." \
+  "Selected provider: ${PROVIDER}" \
   "Ralphy: ${RALPHY_BIN}" \
   "CLIProxyAPI config: ${PROXY_CONFIG}" \
-  "Claude proxy environment: ${PROXY_ENV}" \
-  "" \
-  "If OAuth login was skipped, run:" \
-  "  cliproxyapi --config \"${PROXY_CONFIG}\" --claude-login" \
-  "" \
-  "Before running Claude Code or Ralphy through the proxy:" \
-  "  source \"${PROXY_ENV}\""
+  "Claude proxy environment: ${CLAUDE_PROXY_ENV}" \
+  "Project-local Codex home: ${CODEX_HOME_DIR}"
+
+if [[ "${LOGIN_AFTER_INSTALL}" == false && "${PROVIDER}" != "skip" ]]; then
+  printf '\n%s\n' \
+    "OAuth login was skipped. Run one of the matching commands from README.md before using Ralphy."
+fi

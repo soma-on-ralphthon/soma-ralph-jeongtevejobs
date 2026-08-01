@@ -21,7 +21,7 @@
 - run: `uv run ralphthon-sample`
 
 ## AI Autonomy Plan
-- 사용할 agent: 제품 기획과 seed scaffold에는 Claude Code를 사용하고, 기능 구현에는 Claude Code engine의 Ralphy를 사용한다.
+- 사용할 agent: 설치 시 Claude Code 또는 Codex를 선택한다. 제품 기획과 seed scaffold에는 선택한 CLI를 사용하고, 기능 구현에는 같은 engine의 Ralphy를 사용한다.
 - no-touch 구간 동안 agent가 할 일: `PRODUCT.md`, `AGENTS.md`, `tasks.yaml`을 읽고 정확히 한 task만 구현한 뒤 `./scripts/check.sh`를 실행한다. dependency와 기획 문서는 수정하지 않는다.
 - 실패 시 agent가 회복하는 방식: 최대 1회 재시도하고, 다시 실패하면 변경사항과 로그를 보존한 채 중단한다. 이후 preflight를 재실행하고 사람이 diff를 검토한다.
 
