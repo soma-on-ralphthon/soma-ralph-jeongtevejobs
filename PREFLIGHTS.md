@@ -27,9 +27,9 @@ command, 환경변수, 권한, 실제 터미널/TTY, 선택한 Claude/Codex engi
 - `src/`와 `tests/` 구조
 - `~/.cli-proxy-api/config.yaml`의 존재와 권한. secret 값은 읽거나 출력하지 않음
 - .env.example 계열
-- CI workflow와 `README.md`
+- CI workflow와 `README.md`, `PREREQUISITES.md`
 
-충돌이 있으면 `PRODUCT.md`, `AGENTS.md`, `README.md`, `pyproject.toml`을 우선한다.
+충돌이 있으면 `PRODUCT.md`, `AGENTS.md`, `README.md`, `PREREQUISITES.md`, `pyproject.toml`을 우선한다.
 
 quality script와 project command는 재귀적으로 분석하라.
 
