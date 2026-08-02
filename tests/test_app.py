@@ -6,7 +6,11 @@ Textual 의 run_test() 로 실제 키 입력 경로를 태운다.
 
 from pathlib import Path
 
+from textual._xterm_parser import XTermParser
+from textual.events import Key
+from textual.selection import SELECT_ALL
 from textual.widgets import Input, ProgressBar, Static, Tree
+from textual.widgets.input import Selection as InputSelection
 
 from ralphthon_sample.app import RalphthonApp
 from ralphthon_sample.config import (
@@ -538,6 +542,174 @@ def test_command_palette_is_disabled():
     # Arrange / Act / Assert
     # Ctrl+P 팔레트의 Quit 이 살아 있으면 3연타를 우회할 수 있다.
     assert RalphthonApp.ENABLE_COMMAND_PALETTE is False
+
+
+# --- 종료 키 바인딩 우선순위 ----------------------------------------------------
+#
+# Textual 8.2.8 은 ctrl+c 를 우리 말고도 세 곳에서 잡는다.
+#   app.py:463            Binding("ctrl+c", "help_quit", system=True)
+#   screen.py:272         Binding("ctrl+c,super+c", "screen.copy_text")
+#   widgets/_input.py:139 Binding("ctrl+c,super+c", "copy")
+# 키가 등록되어 있다는 사실만으로는 부족하다. 경쟁에서 이겨 우리 action 으로
+# 해석되지 않으면 실제 터미널에서 종료 배너가 뜨지 않는다.
+
+
+def test_terminal_bytes_parse_into_the_quit_keys():
+    """실제 터미널이 보내는 바이트가 우리가 바인딩한 키 이름으로 해석되는지 본다.
+
+    pilot.press() 는 Key 이벤트를 직접 만들어 드라이버를 건너뛴다.
+    바이트 파싱은 headless 키 입력이 유일하게 지나치지 않는 층이라 따로 잠근다.
+    Ctrl+Q(0x11)는 XON 이라 tty 흐름 제어에 먹힐 수 있어서 특히 확인할 값이 있다.
+    """
+    # Arrange / Act
+    parsed = {}
+    for raw, expected in (("\x03", "ctrl+c"), ("\x11", "ctrl+q")):
+        keys = [event.key for event in XTermParser().feed(raw) if isinstance(event, Key)]
+        parsed[expected] = keys
+
+    # Assert
+    assert parsed == {"ctrl+c": ["ctrl+c"], "ctrl+q": ["ctrl+q"]}
+
+
+def resolved_binding(pilot, key: str):
+    """활성 화면이 그 키에 실제로 연결한 바인딩. 우선순위 경쟁의 승자다."""
+    return pilot.app.screen.active_bindings[key]
+
+
+def assert_bound_to_yak_quit(pilot, key: str, label: str) -> None:
+    """키가 App 레벨 priority 바인딩인 yak_quit 으로 해석되는지 단언한다."""
+    active = resolved_binding(pilot, key)
+    assert active.binding.action == f"yak_quit('{label}')"
+    assert isinstance(active.node, RalphthonApp)
+    assert active.binding.priority is True
+
+
+def select_all_input_text(pilot, text: str = TASK) -> Input:
+    """입력창에 텍스트를 넣고 전체를 선택한다. copy 바인딩이 노리는 상태다."""
+    task_input = pilot.app.query_one("#task-input", Input)
+    task_input.focus()
+    task_input.value = text
+    task_input.selection = InputSelection(0, len(text))
+    return task_input
+
+
+async def test_quit_keys_resolve_to_the_yak_quit_action():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        # Assert
+        # 입력창이 포커스를 가진 최초 화면. Input.copy 가 가장 가까운 경쟁자다.
+        assert_bound_to_yak_quit(pilot, "ctrl+c", "Ctrl+C")
+        assert_bound_to_yak_quit(pilot, "ctrl+q", "Ctrl+Q")
+
+
+async def test_quit_keys_resolve_to_yak_quit_while_the_tree_has_focus():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        pilot.app.query_one("#task-tree", Tree).focus()
+        await pilot.pause()
+
+        # Assert
+        # 포커스가 옮겨가도 우선순위는 그대로여야 한다. 둘 중 하나만 되는 상태를 남기지 않는다.
+        assert_bound_to_yak_quit(pilot, "ctrl+c", "Ctrl+C")
+        assert_bound_to_yak_quit(pilot, "ctrl+q", "Ctrl+Q")
+
+
+async def test_quit_keys_resolve_to_yak_quit_while_input_text_is_selected():
+    # Arrange
+    # Input.copy 는 선택이 있을 때 의미가 생긴다. 실제 실패 시나리오다.
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        task_input = select_all_input_text(pilot)
+        await pilot.pause()
+
+        # Assert
+        assert not task_input.selection.is_empty
+        assert_bound_to_yak_quit(pilot, "ctrl+c", "Ctrl+C")
+        assert_bound_to_yak_quit(pilot, "ctrl+q", "Ctrl+Q")
+
+
+async def test_ctrl_c_opens_the_banner_while_input_text_is_selected():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        select_all_input_text(pilot)
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        # Assert
+        # 복사가 아니라 종료 시도로 가야 한다. 배너가 뜨고 attempt 가 한 번 더 발생한다.
+        assert pilot.app.is_running
+        assert isinstance(pilot.app.screen, QuitBanner)
+        assert screen_text(pilot, "#quit-counter") == f"Ctrl+C 1/{QUIT_SEQUENCE_LENGTH}"
+        assert pilot.app.state.attempt_count == 2
+
+
+async def test_ctrl_q_opens_the_banner_while_input_text_is_selected():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        select_all_input_text(pilot)
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+
+        # Assert
+        assert pilot.app.is_running
+        assert isinstance(pilot.app.screen, QuitBanner)
+        assert screen_text(pilot, "#quit-counter") == f"Ctrl+Q 1/{QUIT_SEQUENCE_LENGTH}"
+
+
+async def test_ctrl_c_opens_the_banner_while_the_screen_holds_a_selection():
+    # Arrange
+    # Screen.copy_text 는 screen.selections 가 채워졌을 때 경쟁한다.
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        tree = pilot.app.query_one("#task-tree", Tree)
+        pilot.app.screen.selections = {tree: SELECT_ALL}
+        await pilot.pause()
+
+        assert pilot.app.screen.get_selected_text() is not None
+
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        # Assert
+        assert pilot.app.is_running
+        assert isinstance(pilot.app.screen, QuitBanner)
+        assert screen_text(pilot, "#quit-counter") == f"Ctrl+C 1/{QUIT_SEQUENCE_LENGTH}"
+
+
+async def test_three_quit_keys_exit_while_input_text_is_selected():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        select_all_input_text(pilot)
+        await pilot.press("ctrl+c", "ctrl+q", "ctrl+c")
+        await pilot.pause()
+
+        # Assert
+        # 선택이 남아 있어도 탈출 경로는 그대로다.
+        assert not pilot.app.is_running
 
 
 async def test_one_quit_key_shows_the_banner_instead_of_quitting():

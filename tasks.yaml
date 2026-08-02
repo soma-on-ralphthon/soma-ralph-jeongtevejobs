@@ -246,7 +246,7 @@ tasks:
         ./scripts/check.sh
 
   - title: "core 5: Ctrl+C 종료 바인딩 실기 동작 확정"
-    completed: false
+    completed: true
     description: |
       목표 (15분)
         실제 터미널에서 Ctrl+C 가 종료 배너를 띄우지 못한다는 보고가 있다.
