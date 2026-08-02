@@ -16,6 +16,8 @@ from ralphthon_sample.config import (
     NOISE_CLAMP,
     NOISE_SIGMA,
     PREREQ_COUNT,
+    QUIT_SEQUENCE_LENGTH,
+    QUIT_WINDOW_SEC,
     SLUMP_ATTEMPT,
     SLUMP_RATIO,
 )
@@ -29,6 +31,7 @@ from ralphthon_sample.state import (
     leave_label,
     leave_time_label,
     mult,
+    next_quit_press,
     total_minutes,
 )
 from ralphthon_sample.texts import (
@@ -459,3 +462,59 @@ def test_hope_line_shows_the_next_attempts_rate():
     # Assert
     assert "97%" in line
     assert "재시도" in line
+
+
+# --- 종료 시퀀스 시간창 -------------------------------------------------------
+#
+# 시간창 판정은 주입 clock 이 준 값만 보는 순수 함수다.
+# time.monotonic 을 전역 monkeypatch 하면 Textual timer 와 Toast 가 오염된다.
+
+
+def test_first_quit_press_opens_a_sequence():
+    # Arrange / Act
+    pressed = next_quit_press(0, None, now=10.0, window=QUIT_WINDOW_SEC)
+
+    # Assert
+    assert pressed == 1
+
+
+def test_quit_press_inside_the_window_advances_the_counter():
+    # Arrange / Act
+    pressed = next_quit_press(1, 10.0, now=11.4, window=QUIT_WINDOW_SEC)
+
+    # Assert
+    assert pressed == 2
+
+
+def test_quit_press_exactly_on_the_window_edge_still_counts():
+    # Arrange / Act
+    pressed = next_quit_press(1, 10.0, now=10.0 + QUIT_WINDOW_SEC, window=QUIT_WINDOW_SEC)
+
+    # Assert
+    assert pressed == 2
+
+
+def test_quit_press_after_the_window_opens_a_new_sequence():
+    # Arrange / Act
+    pressed = next_quit_press(2, 10.0, now=10.0 + QUIT_WINDOW_SEC + 0.01, window=QUIT_WINDOW_SEC)
+
+    # Assert
+    # 리셋 후의 Ctrl+C 는 새 시퀀스다. 그래서 선행 작업 3개가 다시 붙는다.
+    assert pressed == 1
+
+
+def test_three_quit_presses_inside_the_window_reach_the_sequence_length():
+    # Arrange
+    previous_press, previous_at = 0, None
+
+    # Act
+    presses = []
+    for tick in (10.0, 10.5, 11.0):
+        previous_press = next_quit_press(
+            previous_press, previous_at, now=tick, window=QUIT_WINDOW_SEC
+        )
+        previous_at = tick
+        presses.append(previous_press)
+
+    # Assert
+    assert presses == [1, 2, QUIT_SEQUENCE_LENGTH]

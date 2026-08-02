@@ -4,8 +4,13 @@ Textual App, 화면 구성, 키 바인딩만 담당한다.
 계산은 전부 state.py 와 texts.py 의 순수 함수에 있다. 여기에 수치 로직을 넣지 마라.
 """
 
+import time
+from collections.abc import Callable
+
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.timer import Timer
 from textual.widgets import Footer, Header, Input, ProgressBar, Static, Tree
 from textual.widgets.tree import TreeNode
 
@@ -15,15 +20,28 @@ from ralphthon_sample.config import (
     DEMO_SEED,
     INITIAL_ESTIMATE_MIN,
     PREREQ_COUNT,
+    QUIT_SEQUENCE_LENGTH,
+    QUIT_WINDOW_SEC,
     TREE_GUIDE_DEPTH,
 )
-from ralphthon_sample.state import YakState, anger, leave_label, leave_time_label, total_minutes
+from ralphthon_sample.state import (
+    YakState,
+    anger,
+    increment,
+    leave_label,
+    leave_time_label,
+    next_quit_press,
+    total_minutes,
+)
 from ralphthon_sample.texts import BLOCKED_LABEL, apology_for, hope_line, prerequisites_for
+from ralphthon_sample.widgets.quit_banner import QuitBanner
 
 PLACEHOLDER_TEXT = "오늘 처리할 작업을 한 줄로 입력하고 Enter"
 EMPTY_TREE_LABEL = "아직 등록된 작업이 없습니다"
 INITIAL_ANGER = 0
 INITIAL_ATTEMPT_COUNT = 0
+NO_QUIT_SEQUENCE = 0
+NO_ADDED_MINUTES = 0
 
 
 class RalphthonApp(App[None]):
@@ -33,6 +51,16 @@ class RalphthonApp(App[None]):
     """
 
     TITLE = "ralphthon-sample"
+
+    # Ctrl+P 명령 팔레트의 Quit 이 살아 있으면 종료 3연타를 통째로 우회할 수 있다.
+    ENABLE_COMMAND_PALETTE = False
+
+    # 기본 바인딩 상속은 유지한다. 종료로 이어지는 두 키만 개별 override 한다.
+    # inherit_bindings=False 는 필요 이상으로 넓고, q 는 Input 에 문자 q 를 못 넣게 만든다.
+    BINDINGS = [
+        Binding("ctrl+c", "yak_quit('Ctrl+C')", "종료 시도", priority=True),
+        Binding("ctrl+q", "yak_quit('Ctrl+Q')", "종료 시도", priority=True),
+    ]
 
     CSS = """
     #panels {
@@ -56,10 +84,24 @@ class RalphthonApp(App[None]):
     }
     """
 
-    def __init__(self, seed: str = DEMO_SEED) -> None:
+    def __init__(
+        self,
+        seed: str = DEMO_SEED,
+        clock: Callable[[], float] = time.monotonic,
+        quit_window: float = QUIT_WINDOW_SEC,
+    ) -> None:
         super().__init__()
         self._seed = seed
         self.state: YakState | None = None
+
+        # 종료 시간창은 주입 clock 으로 잰다.
+        # time.monotonic 을 전역 monkeypatch 하면 Textual timer 와 Toast 가 오염된다.
+        self._clock = clock
+        self._quit_window = quit_window
+        self._quit_presses = NO_QUIT_SEQUENCE
+        self._quit_last_at: float | None = None
+        self._quit_banner: QuitBanner | None = None
+        self._quit_timer: Timer | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -181,6 +223,95 @@ class RalphthonApp(App[None]):
         message = apology_for(attempt_count)
         if message is not None:
             self.notify(message, timeout=APOLOGY_TIMEOUT_SEC)
+
+    # --- 종료 시퀀스 ----------------------------------------------------------
+
+    def action_yak_quit(self, key_label: str) -> None:
+        """Ctrl+C 와 Ctrl+Q. 종료 대신 배너가 뜨고 시간창 안에 세 번을 채워야 빠져나간다.
+
+        두 키는 같은 시간창을 공유하므로 혼합 3연타도 인정된다.
+        """
+        now = self._clock()
+        pressed = next_quit_press(self._quit_presses, self._quit_last_at, now, self._quit_window)
+        self._quit_presses = pressed
+        self._quit_last_at = now
+
+        if pressed >= QUIT_SEQUENCE_LENGTH:
+            # 세 번째 키는 exit 만 한다.
+            # 여기서 attempt 를 부르면 마지막 갱신이 repaint 전에 사라져 화면에 안 보인다.
+            self._stop_quit_timer()
+            self.exit()
+            return
+
+        if pressed == 1:
+            self._open_quit_banner(key_label)
+        else:
+            self._advance_quit_banner(key_label, pressed)
+
+        self._restart_quit_timer()
+
+    def _open_quit_banner(self, key_label: str) -> None:
+        """시퀀스의 첫 키. attempt 를 1회 부르고 그 변화를 배너에 복제한다."""
+        # 시간창이 만료됐지만 timer 가 아직 안 돈 배너를 먼저 걷어낸다.
+        # 남겨두면 새 배너가 그 위에 쌓여 이전 시퀀스의 숫자가 화면에 남는다.
+        self._close_quit_banner()
+
+        state_before = self.state
+        anger_before = (
+            INITIAL_ANGER
+            if state_before is None
+            else anger(state_before.seed, state_before.attempt_count)
+        )
+        self._attempt()
+        state = self.state
+
+        if state is None:
+            prerequisites: tuple[str, ...] = ()
+            anger_after = INITIAL_ANGER
+            minutes_added = NO_ADDED_MINUTES
+        else:
+            prerequisites = prerequisites_for(state.seed, state.attempt_count, state.root_task)
+            anger_after = anger(state.seed, state.attempt_count)
+            minutes_added = increment(state.seed, state.attempt_count)
+
+        self._quit_banner = QuitBanner(
+            key_label=key_label,
+            pressed=self._quit_presses,
+            prerequisites=prerequisites,
+            anger_before=anger_before,
+            anger_after=anger_after,
+            minutes_added=minutes_added,
+        )
+        self.push_screen(self._quit_banner)
+
+    def _advance_quit_banner(self, key_label: str, pressed: int) -> None:
+        """두 번째 키. 카운터만 갱신한다. App 이 값을 먼저 정해 배너에 넘긴다."""
+        if self._quit_banner is not None:
+            self._quit_banner.update_counter(key_label, pressed)
+
+    def _restart_quit_timer(self) -> None:
+        """다음 키를 기다리는 시간창. 만료되면 카운터와 배너를 리셋한다."""
+        self._stop_quit_timer()
+        self._quit_timer = self.set_timer(self._quit_window, self._reset_quit_sequence)
+
+    def _stop_quit_timer(self) -> None:
+        if self._quit_timer is not None:
+            self._quit_timer.stop()
+            self._quit_timer = None
+
+    def _reset_quit_sequence(self) -> None:
+        """시간창 만료. 다음 Ctrl+C 는 새 시퀀스라 선행 작업 3개가 다시 붙는다."""
+        self._quit_presses = NO_QUIT_SEQUENCE
+        self._quit_last_at = None
+        self._close_quit_banner()
+
+    def _close_quit_banner(self) -> None:
+        if self._quit_banner is None:
+            return
+
+        banner, self._quit_banner = self._quit_banner, None
+        if self.screen is banner:
+            self.pop_screen()
 
 
 def main() -> None:

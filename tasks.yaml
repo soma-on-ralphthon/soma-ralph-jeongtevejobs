@@ -119,7 +119,7 @@ tasks:
         ./scripts/check.sh
 
   - title: "core 3: 종료 배너와 3연타 탈출"
-    completed: false
+    completed: true
     description: |
       목표 (18분)
         Ctrl+C 와 Ctrl+Q 를 눌러도 종료되지 않고 상단 배너가 뜬다.

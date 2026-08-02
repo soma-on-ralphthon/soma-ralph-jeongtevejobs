@@ -11,10 +11,14 @@ from ralphthon_sample.config import (
     APOLOGY_TIMEOUT_SEC,
     INITIAL_ESTIMATE_MIN,
     PREREQ_COUNT,
+    QUIT_BANNER_HEIGHT,
+    QUIT_SEQUENCE_LENGTH,
+    QUIT_WINDOW_SEC,
     TREE_GUIDE_DEPTH,
 )
-from ralphthon_sample.state import anger, leave_label, total_minutes
+from ralphthon_sample.state import anger, increment, leave_label, total_minutes
 from ralphthon_sample.texts import apology_for, hope_rate, prerequisites_for
+from ralphthon_sample.widgets.quit_banner import QuitBanner
 
 TASK = "버튼 색상 변경"
 SEED = "test-seed"
@@ -40,6 +44,14 @@ async def press_enter_on_tree(pilot) -> None:
 def panel_text(pilot, selector: str) -> str:
     """상태 패널 Static 의 본문. Textual 8 에서는 renderable 이 아니라 content 다."""
     return str(pilot.app.query_one(selector, Static).content)
+
+
+def screen_text(pilot, selector: str) -> str:
+    """활성 화면 Static 의 본문.
+
+    App.query_one 은 화면 스택 top 이 아니라 기본 화면을 뒤진다. 모달은 화면에서 직접 찾아야 한다.
+    """
+    return str(pilot.app.screen.query_one(selector, Static).content)
 
 
 def count_nodes(node) -> int:
@@ -305,3 +317,247 @@ async def test_apology_disappears_from_the_sixth_attempt(monkeypatch):
         # Assert
         assert pilot.app.state.attempt_count == 6
         assert calls == list(apology_for(n) for n in range(1, 6))
+
+
+# --- 종료 배너와 3연타 탈출 ---------------------------------------------------
+
+
+class FakeClock:
+    """App 에 주입하는 clock.
+
+    time.monotonic 을 전역 monkeypatch 하면 Textual timer 와 Toast 가 오염된다.
+    """
+
+    def __init__(self, now: float = 0.0) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+async def test_active_bindings_register_both_quit_keys():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        bindings = pilot.app.screen.active_bindings
+
+        # Assert
+        assert "ctrl+c" in bindings
+        assert "ctrl+q" in bindings
+
+
+def test_command_palette_is_disabled():
+    # Arrange / Act / Assert
+    # Ctrl+P 팔레트의 Quit 이 살아 있으면 3연타를 우회할 수 있다.
+    assert RalphthonApp.ENABLE_COMMAND_PALETTE is False
+
+
+async def test_one_quit_key_shows_the_banner_instead_of_quitting():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        # Assert
+        assert pilot.app.is_running
+        assert isinstance(pilot.app.screen, QuitBanner)
+        assert screen_text(pilot, "#quit-counter") == f"Ctrl+C 1/{QUIT_SEQUENCE_LENGTH}"
+
+
+async def test_first_quit_key_adds_three_prerequisites():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        # 배너가 뜨면 App.query_one 이 모달 화면을 뒤지므로 트리를 미리 잡아둔다.
+        tree = pilot.app.query_one("#task-tree", Tree)
+        before = count_nodes(tree.root)
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        # Assert
+        # 종료 시도가 곧 8회차 attempt 다.
+        assert pilot.app.state.attempt_count == 2
+        assert count_nodes(tree.root) == before + PREREQ_COUNT
+
+
+async def test_banner_repeats_the_new_prerequisites():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+    expected = list(prerequisites_for(SEED, 2, TASK))
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+        lines = [screen_text(pilot, f"#quit-prereq-{index}") for index in range(PREREQ_COUNT)]
+
+        # Assert
+        # 배너는 배경 repaint 에 기대지 않고 상태 변화를 스스로 복제해 보여준다.
+        assert lines == expected
+
+
+async def test_banner_shows_the_anger_and_estimate_transition():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        before = anger(SEED, 1)
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        # Assert
+        # 분노는 상수가 아니라 첫 종료 키 직전과 직후 값으로 계산한다.
+        assert screen_text(pilot, "#quit-anger") == f"분노 {before} → {anger(SEED, 2)}"
+        assert screen_text(pilot, "#quit-total") == f"누적 +{increment(SEED, 2)}분"
+
+
+async def test_banner_is_seven_rows_tall():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        # Assert
+        # 콘텐츠 6행(카운터 1 + 선행 작업 3 + 분노 1 + 누적 1)에 하단 border 1행이다.
+        assert pilot.app.screen.query_one("#quit-banner").outer_size.height == QUIT_BANNER_HEIGHT
+
+
+async def test_second_quit_key_only_advances_the_counter():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        tree = pilot.app.query_one("#task-tree", Tree)
+        await pilot.press("ctrl+c")
+        after_first = (pilot.app.state.attempt_count, count_nodes(tree.root))
+
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+
+        # Assert
+        # 두 번째 키는 카운터만 갱신한다. attempt 는 시퀀스의 첫 키에서만 1회다.
+        assert (pilot.app.state.attempt_count, count_nodes(tree.root)) == after_first
+        assert screen_text(pilot, "#quit-counter") == f"Ctrl+Q 2/{QUIT_SEQUENCE_LENGTH}"
+
+
+async def test_three_quit_keys_inside_the_window_exit():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        await pilot.press("ctrl+c", "ctrl+c", "ctrl+c")
+        await pilot.pause()
+
+        # Assert
+        assert not pilot.app.is_running
+
+
+async def test_mixed_quit_keys_inside_the_window_exit():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        await pilot.press("ctrl+c", "ctrl+q", "ctrl+c")
+        await pilot.pause()
+
+        # Assert
+        # Ctrl+C 와 Ctrl+Q 는 같은 시간창을 공유한다.
+        assert not pilot.app.is_running
+
+
+async def test_third_quit_key_does_not_run_another_attempt():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        tree = pilot.app.query_one("#task-tree", Tree)
+        await pilot.press("ctrl+c", "ctrl+q")
+        after_first = (pilot.app.state.attempt_count, count_nodes(tree.root))
+
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        # Assert
+        # 세 번째 키에서 attempt 를 부르면 마지막 갱신이 repaint 전에 사라진다.
+        assert (pilot.app.state.attempt_count, count_nodes(tree.root)) == after_first
+
+
+async def test_expired_window_resets_the_counter_and_grows_the_tree_again():
+    # Arrange
+    clock = FakeClock()
+    app = RalphthonApp(seed=SEED, clock=clock)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        tree = pilot.app.query_one("#task-tree", Tree)
+        await pilot.press("ctrl+c")
+        clock.advance(QUIT_WINDOW_SEC + 0.1)
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        # Assert
+        # 리셋 후의 Ctrl+C 는 새 시퀀스다. 종료를 여러 번 시도할수록 트리가 계속 늘어난다.
+        assert pilot.app.is_running
+        assert screen_text(pilot, "#quit-counter") == f"Ctrl+C 1/{QUIT_SEQUENCE_LENGTH}"
+        assert pilot.app.state.attempt_count == 3
+        assert count_nodes(tree.root) == PREREQ_COUNT * 3
+
+
+async def test_expired_window_closes_the_banner():
+    # Arrange
+    # 시간창을 짧게 주입해 timer 경로를 실제로 태운다.
+    app = RalphthonApp(seed=SEED, quit_window=0.4)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        await pilot.press("ctrl+c")
+        assert isinstance(pilot.app.screen, QuitBanner)
+
+        await pilot.pause(0.8)
+
+        # Assert
+        assert not isinstance(pilot.app.screen, QuitBanner)
+
+
+async def test_quit_sequence_survives_an_empty_session():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        # Assert
+        # 작업을 등록하기 전에도 한 번의 Ctrl+C 로는 빠져나갈 수 없다.
+        assert pilot.app.is_running
+        assert isinstance(pilot.app.screen, QuitBanner)

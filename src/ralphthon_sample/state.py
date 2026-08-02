@@ -132,3 +132,20 @@ def leave_label(seed: str, attempt_count: int) -> str:
     if anger(seed, attempt_count) >= ANGER_MAX:
         return UNKNOWN_LEAVE_LABEL
     return leave_time_label(total_minutes(seed, attempt_count))
+
+
+def next_quit_press(
+    previous_press: int,
+    previous_at: float | None,
+    now: float,
+    window: float,
+) -> int:
+    """이번 종료 키가 시퀀스의 몇 번째인지 판정한다.
+
+    직전 키가 없거나 시간창을 넘겼으면 새 시퀀스의 첫 키다.
+    시각은 App 이 주입한 clock 이 준다. time.monotonic 을 전역 monkeypatch 하면
+    Textual timer 와 Toast 가 오염되므로 여기서는 숫자만 받는다.
+    """
+    if previous_press < 1 or previous_at is None or now - previous_at > window:
+        return 1
+    return previous_press + 1
