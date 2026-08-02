@@ -1,0 +1,14 @@
+.DS_Store
+.env
+.env.*
+.python-version
+.tools/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+
+# Ralphy preflight runtime artifacts and local intervention logs
+.ralphy/preflight/
