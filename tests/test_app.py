@@ -11,6 +11,7 @@ from textual.widgets import Input, ProgressBar, Static, Tree
 from ralphthon_sample.app import RalphthonApp
 from ralphthon_sample.config import (
     APOLOGY_TIMEOUT_SEC,
+    DEMO_SEED,
     INITIAL_ESTIMATE_MIN,
     PREREQ_COUNT,
     QUIT_BANNER_HEIGHT,
@@ -564,6 +565,104 @@ async def test_quit_sequence_survives_an_empty_session():
         # 작업을 등록하기 전에도 한 번의 Ctrl+C 로는 빠져나갈 수 없다.
         assert pilot.app.is_running
         assert isinstance(pilot.app.screen, QuitBanner)
+
+
+# --- DEMO_SEED 데모 클라이맥스 -------------------------------------------------
+#
+# PRODUCT.md Happy path 5~7 의 회귀 잠금.
+# 수치 자체는 test_state.py 의 DEMO_SEED_INCREMENTS 가 잠근다.
+# 여기서는 그 수열이 실제 화면과 배너까지 배선되는지를 본다.
+# 다른 headless 테스트는 전부 seed="test-seed" 로 도니까,
+# 기본 seed 가 바뀌거나 패널 배선이 끊겨도 순수 테스트만으로는 데모가 죽은 걸 알 수 없다.
+
+# DEMO_SEED 증가폭 (3, 5, 7, 11, 21, 18, 43, 98) 에서 따라 나오는 값이다.
+CLIMAX_ATTEMPT = 7
+CLIMAX_TOTAL_MIN = 113  # 5 + 108
+CLIMAX_ANGER = 76  # (7 * 108 + 5) // 10
+CLIMAX_LEAVE_LABEL = "익일 00:18"  # 22:25 + 113분
+CLIMAX_HOPE_RATE = 21
+
+QUIT_ATTEMPT = 8
+QUIT_ADDED_MIN = 98
+QUIT_ANGER = 100  # (7 * 206 + 5) // 10 은 144 라 상한에 걸린다
+QUIT_LEAVE_LABEL = "미정"
+
+
+async def attempt_until(pilot, attempt_count: int) -> None:
+    """작업을 등록하고 목표 회차까지 빈 Enter 를 반복한다."""
+    await submit_task(pilot)
+    for _ in range(attempt_count - 1):
+        await submit_task(pilot, task="")
+
+
+async def test_demo_seed_is_the_default_of_the_app():
+    # Arrange
+    # seed 를 넘기지 않는다. `uv run ralphthon-sample` 이 타는 경로 그대로다.
+    app = RalphthonApp()
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+
+        # Assert
+        # 기본 seed 가 DEMO_SEED 가 아니면 아래 클라이맥스 회귀가 통째로 무의미해진다.
+        assert pilot.app.state.seed == DEMO_SEED
+
+
+async def test_demo_seed_seventh_attempt_pushes_leaving_past_midnight():
+    # Arrange
+    app = RalphthonApp()
+
+    # Act
+    async with app.run_test() as pilot:
+        await attempt_until(pilot, CLIMAX_ATTEMPT)
+
+        # Assert
+        # 7회차에 퇴근 시간이 자정을 넘는다. 분노는 아직 100 미만이라 "미정"에 가려지지 않는다.
+        assert pilot.app.state.attempt_count == CLIMAX_ATTEMPT
+        assert f"{CLIMAX_TOTAL_MIN}분" in panel_text(pilot, "#estimate")
+        assert panel_text(pilot, "#leave-time") == f"예상 퇴근 {CLIMAX_LEAVE_LABEL}"
+        assert pilot.app.query_one("#anger", ProgressBar).progress == CLIMAX_ANGER
+        assert f"{CLIMAX_HOPE_RATE}%" in panel_text(pilot, "#hope")
+
+
+async def test_demo_seed_first_quit_key_maxes_anger_and_gives_up_on_the_clock():
+    # Arrange
+    app = RalphthonApp()
+
+    # Act
+    async with app.run_test() as pilot:
+        await attempt_until(pilot, CLIMAX_ATTEMPT)
+        # 배너가 뜨면 App.query_one 이 모달 화면을 뒤진다. 배경 패널을 미리 잡아둔다.
+        leave_time = pilot.app.query_one("#leave-time", Static)
+        anger_bar = pilot.app.query_one("#anger", ProgressBar)
+
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        # Assert
+        # 종료 시도가 곧 8회차다. Enter 로 미리 100까지 가버리면 이 전환이 죽는다.
+        assert pilot.app.is_running
+        assert pilot.app.state.attempt_count == QUIT_ATTEMPT
+        assert anger_bar.progress == QUIT_ANGER
+        assert str(leave_time.content) == f"예상 퇴근 {QUIT_LEAVE_LABEL}"
+
+
+async def test_demo_seed_quit_banner_shows_the_climax_transition():
+    # Arrange
+    app = RalphthonApp()
+
+    # Act
+    async with app.run_test() as pilot:
+        await attempt_until(pilot, CLIMAX_ATTEMPT)
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+        # Assert
+        # 배너가 그 전환을 함께 보여준다. 배경 repaint 에 기대지 않는다.
+        assert screen_text(pilot, "#quit-counter") == f"Ctrl+C 1/{QUIT_SEQUENCE_LENGTH}"
+        assert screen_text(pilot, "#quit-anger") == f"분노 {CLIMAX_ANGER} → {QUIT_ANGER}"
+        assert screen_text(pilot, "#quit-total") == f"누적 +{QUIT_ADDED_MIN}분"
 
 
 # --- 상태 저장과 복원 ---------------------------------------------------------
