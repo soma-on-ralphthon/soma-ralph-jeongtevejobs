@@ -10,8 +10,8 @@ __pycache__/
 dist/
 *.egg-info/
 
-# Ralphy preflight runtime artifacts and local intervention logs
-.ralphy/preflight/
+# Ralphy 로컬 상태 전체 (config, progress log, preflight artifact)
+.ralphy/
 
 # Stretch task 상태 저장 파일
 .ralphthon-state.json
