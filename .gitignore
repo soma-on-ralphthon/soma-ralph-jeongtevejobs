@@ -12,3 +12,6 @@ dist/
 
 # Ralphy preflight runtime artifacts and local intervention logs
 .ralphy/preflight/
+
+# Stretch task 상태 저장 파일
+.ralphthon-state.json

@@ -1,0 +1,198 @@
+{
+  "$comment": "Ralphy 실행 환경 계약. scripts/ralph-preflight.sh가 이 파일을 읽어 검증한다. secret 값은 담지 않고 변수 이름과 파일 경로, 요구 권한만 기록한다. 실측값은 런타임에 preflight가 채운다.",
+  "contract_version": 2,
+  "generated_by": "PREFLIGHTS.md",
+  "authority_order": [
+    "PRODUCT.md",
+    "AGENTS.md",
+    "README.md",
+    "PREREQUISITES.md",
+    "pyproject.toml"
+  ],
+
+  "platform": {
+    "supported_os": ["Darwin"],
+    "$comment": "scripts/install-prerequisites.sh가 macOS 전용이다. PREREQUISITES.md 참조.",
+    "shell": "bash",
+    "min_bash_version": "3.2",
+    "$shell_comment": "macOS 기본 bash가 3.2.57이다. preflight script는 연관 배열, mapfile, ${var^^} 같은 bash 4 문법을 쓰지 않는다.",
+    "refuse_root": true
+  },
+
+  "runtime": {
+    "language": "python",
+    "min_version": "3.12",
+    "version_source": "pyproject.toml:requires-python",
+    "python_version_file": null,
+    "$comment": ".python-version은 .gitignore 대상이라 저장소에 존재하지 않는다. uv가 requires-python으로 인터프리터를 고른다."
+  },
+
+  "package_manager": {
+    "name": "uv",
+    "min_version": "0.5.0",
+    "lockfile": "uv.lock",
+    "manifest": "pyproject.toml",
+    "lock_check_command": ["uv", "lock", "--check"],
+    "sync_command": ["uv", "sync", "--frozen"],
+    "isolate_inherited_virtualenv": true,
+    "$isolate_comment": "상위 셸의 VIRTUAL_ENV가 프로젝트 .venv와 다르면 uv가 경고를 낸다. preflight는 uv 호출 시 VIRTUAL_ENV를 제거해 프로젝트 환경으로 고정한다."
+  },
+
+  "required_commands": ["git", "bash", "uv"],
+
+  "declared_dependencies": {
+    "runtime": ["textual"],
+    "dev_group": ["pytest", "pytest-asyncio", "ruff"],
+    "build_backend": ["hatchling"],
+    "$comment": "이 목록에 없는 package를 install하지 마라. AGENTS.md의 dependency 임의 추가 금지 규칙이다."
+  },
+
+  "project_executables": [
+    ".venv/bin/python",
+    ".venv/bin/pytest",
+    ".venv/bin/ruff",
+    ".venv/bin/ralphthon-sample"
+  ],
+
+  "required_imports": ["textual", "pytest", "pytest_asyncio"],
+
+  "entry_points": {
+    "console_script": "ralphthon-sample",
+    "module": "ralphthon_sample.app:main",
+    "package_root": "src/ralphthon_sample",
+    "test_root": "tests"
+  },
+
+  "quality_commands": {
+    "gate": ["./scripts/check.sh"],
+    "steps": [
+      ["uv", "run", "ruff", "check", "."],
+      ["uv", "run", "ruff", "format", "--check", "."],
+      ["uv", "run", "pytest"],
+      ["uv", "build"]
+    ],
+    "$comment": "AGENTS.md가 이 4단계를 순서대로 요구한다. preflight는 scripts/check.sh를 재귀 분석해 각 command의 dependency 선언 여부를 확인한다."
+  },
+
+  "test_configuration": {
+    "framework": "pytest",
+    "asyncio_mode": "auto",
+    "asyncio_plugin": "pytest-asyncio",
+    "$comment": "pyproject.toml의 asyncio_mode=auto가 pytest-asyncio를 필수로 만든다. Textual App.run_test()가 async context manager이기 때문이다.",
+    "testpaths": ["tests"],
+    "headless": true
+  },
+
+  "ai_engine": {
+    "provider_file": ".tools/provider",
+    "valid_providers": ["claude", "codex", "both", "skip"],
+    "ralphy": {
+      "wrapper": "scripts/ralphy.sh",
+      "bin": ".tools/bin/ralphy",
+      "venv": ".tools/ralphy-venv",
+      "pinned_version": "4.0.1",
+      "dry_run_args": ["--dry-run", "--yaml", "tasks.yaml", "--max-iterations", "1", "--no-commit"],
+      "$comment": "전역 ralphy를 쓰지 않는다. wrapper가 provider별 환경변수를 주입한다."
+    },
+    "claude": {
+      "command": "claude",
+      "env_file": "~/.cli-proxy-api/ralphthon-claude.env",
+      "env_file_mode": "600",
+      "required_env_names": ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+      "$comment": "env 값은 읽거나 출력하지 않는다. 이름의 존재 여부와 파일 권한만 확인한다."
+    },
+    "codex": {
+      "command": "codex",
+      "codex_home": ".tools/codex-home",
+      "required_files": ["config.toml", "auth.json"],
+      "required_mode": "600",
+      "env_name": "CODEX_HOME",
+      "$comment": "provider가 codex 또는 both일 때만 검증한다. 프로젝트 전용 CODEX_HOME이라 ~/.codex를 덮지 않는다."
+    },
+    "both_requires_explicit_engine": true,
+    "$both_comment": "provider가 both이면 pilot 명령에 --claude 또는 --codex를 명시해야 한다. wrapper 기본값은 claude다."
+  },
+
+  "cliproxyapi": {
+    "command": "cliproxyapi",
+    "config": "~/.cli-proxy-api/config.yaml",
+    "config_mode": "600",
+    "auth_dir": "~/.cli-proxy-api",
+    "auth_dir_mode": "700",
+    "host": "127.0.0.1",
+    "port": 8317,
+    "brew_service": "cliproxyapi",
+    "$comment": "OAuth credential은 auth-dir에 provider별 json으로 저장된다. 존재 여부만 확인하고 내용은 읽지 않는다."
+  },
+
+  "git": {
+    "required_config": ["user.name", "user.email"],
+    "$comment": "Ralphy는 task 완료 후 자동 commit한다. identity가 비어 있으면 commit이 실패한다. --no-commit pilot에도 verify는 이 값을 요구한다.",
+    "require_writable_worktree": true,
+    "forbid_auto_commit": true,
+    "forbid_reset_clean_checkout_stash": true
+  },
+
+  "terminal": {
+    "real_tty_required_for": ["uv run ralphthon-sample", "./scripts/ralphy.sh (interactive engine)"],
+    "headless_ok_for": ["uv run pytest", "./scripts/check.sh", "./scripts/ralph-preflight.sh"],
+    "requires_utf8_locale": true,
+    "requires_color": true,
+    "min_columns": 80,
+    "min_lines": 24,
+    "$comment": "Textual TUI는 실제 터미널에서 실행한다. 테스트는 App.run_test()로 headless 수행하므로 TTY가 필요 없다. tasks.yaml core 3의 실기 확인 항목은 80x24 실제 터미널을 요구한다."
+  },
+
+  "privileged_actions": {
+    "$comment": "sudo가 필요한 작업은 자동 실행하지 않는다. 감지되면 .ralphy/preflight/privileged-actions.sh에 사용자 검토용으로 기록만 한다.",
+    "auto_run": false,
+    "script": ".ralphy/preflight/privileged-actions.sh",
+    "known": []
+  },
+
+  "user_actions": {
+    "$comment": "preflight가 대신 수행하지 않는다. 사용자만 실행할 수 있는 작업 목록이다.",
+    "items": [
+      "git config user.name / user.email 설정",
+      "./scripts/install-prerequisites.sh --provider <claude|codex> [--login] 실행",
+      "cliproxyapi --claude-login / --codex-login provider OAuth",
+      "brew services start cliproxyapi",
+      "실제 터미널에서 uv run ralphthon-sample 실기 확인"
+    ]
+  },
+
+  "forbidden": {
+    "$comment": "PREFLIGHTS.md와 AGENTS.md가 금지하는 동작이다.",
+    "items": [
+      "pyproject.toml에 없는 dependency의 global install / uv add / pip install",
+      "uv.lock 또는 pyproject.toml 임의 수정",
+      "tasks.yaml의 completed 값 수정",
+      "제품 기능 구현",
+      "git reset / clean / checkout / stash / 파일 삭제",
+      "자동 commit 또는 push",
+      "secret 생성 또는 출력",
+      "script 전체의 sudo 실행"
+    ]
+  },
+
+  "fingerprint_files": [
+    "tasks.yaml",
+    "pyproject.toml",
+    "uv.lock",
+    "scripts/check.sh",
+    "scripts/install-prerequisites.sh",
+    "scripts/ralphy.sh",
+    ".tools/provider",
+    ".ralphy/config.yaml",
+    "ralph.environment.json"
+  ],
+
+  "artifacts_dir": ".ralphy/preflight",
+  "artifacts": {
+    "report": ".ralphy/preflight/report.md",
+    "passed_marker": ".ralphy/preflight/PASSED",
+    "fingerprint": ".ralphy/preflight/fingerprint.txt",
+    "privileged_actions": ".ralphy/preflight/privileged-actions.sh",
+    "logs_dir": ".ralphy/preflight/logs"
+  }
+}

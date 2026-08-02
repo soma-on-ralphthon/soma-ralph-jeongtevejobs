@@ -1,0 +1,20 @@
+project:
+  name: hackathon-template
+  language: Python
+  framework: ''
+  description: ''
+commands:
+  test: pytest
+  lint: ruff check .
+  build: ''
+rules:
+- Before coding, read PRODUCT.md and AGENTS.md
+- Work on exactly one task and avoid unrelated refactoring
+- Run ./scripts/check.sh before reporting completion
+- Do not add, remove, or update dependencies
+- Do not weaken or delete tests
+- Do not run git commit or git push. The human reviews the diff and commits.
+- 'This project uses tasks.yaml, not PRD.md. To mark completion, set completed: true
+  for that one task only. Do not touch title, description, or task order.'
+boundaries:
+  never_touch: []

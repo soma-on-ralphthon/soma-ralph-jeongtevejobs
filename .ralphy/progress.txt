@@ -1,0 +1,35 @@
+# Ralphy Progress Log
+
+## 2026-08-02 — core 1: 작업 입력과 최초 선행 작업 3개 표시 (completed)
+
+구현
+  - config.py 신규. BASE_TIME(22:25), INITIAL_ESTIMATE_MIN(5), NOISE_SIGMA(0.22),
+    NOISE_CLAMP((0.6, 1.6)), ANGER_MAX(100), PREREQ_COUNT(3), DEFAULT_SEED.
+  - state.py 신규. frozen dataclass YakState(root_task, attempt_count, seed, started_at).
+    attempt() 는 replace() 로 새 상태를 반환한다. leave_time_label(total_minutes) 순수 함수 추가.
+    Textual 을 import 하지 않는다.
+  - texts.py 신규. 선행 작업 템플릿 14개 하드코딩.
+    prerequisites_for(seed, n, task) 가 random.Random(f"{seed}:{n}") 로 중복 없이 3개를 뽑는다.
+  - app.py 재작성. Horizontal 안에 Tree 2fr / 상태 패널 1fr, 하단 Input, Header/Footer.
+    상태 패널은 분노 ProgressBar(total=100), 예상 소요 5분, 예상 퇴근 22:30.
+    Input Enter -> _start_task/_attempt 로 선행 작업 3개를 트리에 붙인다.
+
+테스트
+  - tests/test_state.py 신규 14건. config 상수, 4필드 확인, attempt 불변성,
+    frozen 검증, leave_time_label, 템플릿과 prerequisites_for 순수성.
+  - tests/test_app.py 신규 8건. 세 패널 동시 마운트, 최초 5분/22:30 표시, 분노 0,
+    Enter 1회에 자식 정확히 3개, 문구 중복 없음과 작업명 포함, 입력창 초기화, 빈 입력 무시.
+  - tests/test_smoke.py 는 제거하지 않고 유지. 사라진 #placeholder 단언을
+    실제 위젯 #task-tree 단언으로 교체했다. 단언을 약화한 곳은 없다.
+
+검증
+  - ./scripts/check.sh 통과 (ruff check / ruff format --check / pytest 24 passed / uv build).
+  - 80x24 headless 렌더에서 트리 3개, 분노 게이지, 예상 퇴근 22:30, 입력창이 한 화면에 보임을 확인.
+  - console script ralphthon_sample.app:main 로드 확인.
+
+메모
+  - Textual App 에 이미 _register() 가 있어 이름이 충돌했다. _start_task() 로 바꿨다.
+  - Textual 8.2.8 의 Static 본문 접근자는 renderable 이 아니라 content 다.
+  - DEFAULT_SEED 는 세션 기본값일 뿐이다. core 2 의 DEMO_SEED 는 아직 정하지 않았다.
+  - 커밋하지 않았다. 사람이 diff 를 검토하고 커밋한다.
+

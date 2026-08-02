@@ -1,0 +1,201 @@
+# 야크 셰이빙 TUI - 구현 task
+#
+# 의존성 순서대로 배치했다. 위에서부터 하나씩만 수행한다.
+# 프로젝트 초기화와 패키지 설치는 seed 단계에서 끝난 것으로 본다. task에 포함하지 않는다.
+# 수치 모델과 문구 규칙의 근거는 PRODUCT.md에 있다. 작업 전에 PRODUCT.md와 AGENTS.md를 읽어라.
+
+tasks:
+  - title: "core 1: 작업 입력과 최초 선행 작업 3개 표시"
+    completed: true
+    description: |
+      목표 (17분)
+        앱을 실행해 한 줄 작업을 입력하고 Enter를 누르면 선행 작업 3개가 트리에 나타나고
+        세 패널이 한 화면에 표시되는 최소 vertical slice를 완성한다.
+
+      구현 범위
+        - src/ralphthon_sample/config.py 에 상수를 모은다.
+          BASE_TIME(22:25), INITIAL_ESTIMATE_MIN(5), NOISE_SIGMA(0.22),
+          NOISE_CLAMP((0.6, 1.6)), ANGER_MAX(100), PREREQ_COUNT(3)
+        - src/ralphthon_sample/state.py 에 YakState 를 만든다.
+          필드는 root_task, attempt_count, seed, started_at 네 개뿐이다.
+          attempt() 는 새 상태를 반환한다. 기존 객체를 변형하지 않는다.
+        - src/ralphthon_sample/texts.py 에 선행 작업 템플릿 목록을 하드코딩한다.
+          최소 12개. "{task} 하기 전에 ..." 형태로 쓰고 중복 없이 3개를 뽑는다.
+        - src/ralphthon_sample/app.py 에 Textual App 을 만든다.
+          좌측 2fr 에 Tree, 우측 1fr 에 분노 게이지(ProgressBar total=100)와
+          예상 퇴근 시간(Static)을 세로로 배치한다. 하단에 Input.
+        - Input 에서 Enter 를 누르면 attempt() 를 호출하고 트리에 자식 3개를 붙인다.
+
+      acceptance criteria
+        - uv run ralphthon-sample 이 실제 터미널에서 실행된다.
+        - 작업을 입력하고 Enter 를 누르면 트리에 자식 노드가 정확히 3개 추가된다.
+        - 최초 견적 5분과 퇴근 시각 22:30 이 화면에 표시된다.
+        - Tree, ProgressBar, 퇴근 시간 Static 이 한 화면에 동시에 보인다.
+        - 선행 작업 문구 3개가 서로 다르고 입력한 작업 이름을 포함한다.
+        - YakState 는 불변이다. attempt() 가 원본을 바꾸지 않음을 테스트로 확인한다.
+        - run_test() headless smoke 테스트가 통과한다.
+
+      검증 명령
+        uv run pytest -q
+        uv run ruff check .
+        ./scripts/check.sh
+
+  - title: "core 2: 반복 attempt와 파생값 4종"
+    completed: false
+    description: |
+      목표 (20분)
+        Enter 를 반복할 때 증가폭, 분노, 퇴근 시간 표기, 사과 문구, 성공 확률이
+        PRODUCT.md 의 수치 모델대로 갱신되게 한다. Input 경로와 Tree 경로가 같은 코드를 탄다.
+
+      구현 범위
+        - state.py 에 순수 파생 함수를 추가한다. 전부 (seed, attempt_count) 만으로 계산한다.
+          RNG 객체를 상태로 들고 있지 마라. 매번 random.Random(f"{seed}:{n}") 을 새로 만든다.
+            fib(n)            3, 5 로 시작하는 무한 재귀 수열
+            mult(seed, n)     clamp(gauss(1.0, 0.22), 0.6, 1.6)
+            increment(n)      max(1, round(fib(n) * mult(seed, n)))
+                              단 n == 6 이면 max(1, round(increment(5) * 0.85))
+                              6회차는 mult(seed, 6) 을 계산하지 않는다
+            total_minutes(n)  5 + increment(1..n) 의 합
+            anger(n)          min(100, (7 * (total_minutes(n) - 5) + 5) // 10)
+            leave_label(n)    anger == 100 이면 "미정"
+                              아니면 22:25 + total_minutes 를 HH:MM 으로,
+                              자정을 넘으면 "익일 HH:MM"
+        - texts.py 에 사과 문구와 성공 확률을 추가한다.
+          apology_for(n)  1~5회차 문구, 6회차 이상 None
+          hope_rate(n)    다음 재시도의 성공 확률. attempt_count 로 색인하고 0부터 시작한다.
+                          [97, 94, 89, 81, 70, 56, 39, 21, 3], n >= 9 는 0
+                          아직 한 번도 시도하지 않은 최초 화면이 hope_rate(0) = 97 이다
+        - config.py 에 DEMO_SEED 를 고정한다. 순서를 지켜라.
+            1) 먼저 DEMO_SEED 유효조건 테스트를 작성한다.
+                 조건 1  1~5회차 증가폭이 엄격히 증가
+                 조건 2  7회차 누적 추가분이 90 이상 142 이하
+                         90 이상   자정을 넘어 "익일" 이 표시된다
+                         142 이하  분노가 아직 100 미만이라 "미정" 에 가려지지 않는다
+            2) 수치 모델을 구현한다.
+            3) 고정된 유한 seed 범위에서 조건을 만족하는 가장 작은 seed 를 한 번 골라
+               config.py 에 상수로 기록한다. 탐색 로직을 제품 코드에 남기지 마라.
+            4) 그 seed 의 실제 1~8회차 증가폭과
+               "7회차 분노 < 100", "8회차 분노 == 100" 을 회귀 테스트로 고정한다.
+          정확히 3,5,8,13,21,18,55,89 를 내는 seed 를 찾으려 하지 마라.
+          확률이 약 288만분의 1이라 탐색 비용이 부당하다. 위 두 조건만 보면 된다.
+          상한 142 를 빼면 약 10% 의 seed 가 7회차에 이미 분노 100 이 되어
+          첫 Ctrl+C 의 "86 -> 100" 전환이 "100 -> 100" 으로 죽는다.
+        - app.py 에서 Input Enter, Tree Enter, 빈 Enter 를 모두 같은 attempt 핸들러로 보낸다.
+          최초 등록 후에는 빈 Enter 도 "활성 작업 재시도" 로 처리한다.
+        - 새 선행 작업으로 커서를 옮긴다. move_cursor 와
+          scroll_to_node(animate=False) 를 쓴다. select_node 는 쓰지 마라.
+          select_node 는 NodeSelected 를 다시 발행해서 attempt 가 연쇄 호출된다.
+        - 사과는 App.notify() 로 띄운다. timeout 은 1.0초, 새 알림 전에 기존 알림을 지운다.
+        - 세 패널은 하나의 attempt 안에서 원자적으로 함께 갱신한다.
+          미정 표기는 분노가, 사과와 성공 확률은 attempt_count 가 구동한다.
+          셋을 같은 watcher 에 묶지 마라.
+
+      acceptance criteria
+        - DEMO_SEED 회귀 테스트가 있다. 그 seed 의 1~8회차 증가폭이 정확한 값으로 고정되어 있다.
+          찾은 seed 와 그 수열을 테스트에 하드코딩해서 이후 변경을 잠근다.
+        - DEMO_SEED 가 조건을 만족한다.
+            1~5회차 증가폭이 엄격히 증가
+            7회차 누적 추가분이 90 이상 142 이하
+            7회차에 leave_label 이 "익일" 로 시작하고 분노가 100 미만
+            8회차에 분노가 100 이고 leave_label 이 "미정"
+        - 속성 테스트가 통과한다. 아래는 임의 seed 여러 개에서 전부 성립해야 한다.
+            모든 increment > 0
+            total_minutes 는 단조 증가
+            increment(6) < increment(5)
+            anger 는 7~9회차 안에 100 에 도달
+            anger == 100 이면 leave_label 이 "미정"
+          단조 증가는 6회차 외에도 노이즈로 깨질 수 있다. 임의 seed 에 단조 증가를 요구하지 마라.
+        - anger 는 정수 산술이다. 부동소수점 round 를 쓰지 마라.
+          추가분 15, 35, 55, 75, 95, 115, 135 에서 half-up 결과가 나오는지 확인한다.
+        - apology_for(6) 이 None 이고, hope_rate(0) 이 97 이며 hope_rate(9) 가 0 이다.
+        - Input Enter 1회와 Tree Enter 1회가 같은 attempt 경로를 타는 headless 테스트가
+          정확히 한 건 있다. 파생값 조합은 순수 함수 표 테스트로 커버한다.
+        - Tree 가 자동 스크롤되어 새 선행 작업이 화면 안에 보인다. guide_depth 는 2.
+
+      검증 명령
+        uv run pytest -q
+        uv run ruff check .
+        uv run ruff format --check .
+        ./scripts/check.sh
+
+  - title: "core 3: 종료 배너와 3연타 탈출"
+    completed: false
+    description: |
+      목표 (18분)
+        Ctrl+C 와 Ctrl+Q 를 눌러도 종료되지 않고 상단 배너가 뜬다.
+        1.5초 안에 세 번 눌러야만 앱이 종료된다.
+
+      구현 범위
+        - App 기본 바인딩 상속은 유지한다. inherit_bindings=False 를 쓰지 마라.
+          Ctrl+C 와 Ctrl+Q 만 같은 priority action 으로 개별 override 한다.
+          q 키는 만들지 않는다. Input 에 문자 q 를 입력할 수 없게 되기 때문이다.
+        - ENABLE_COMMAND_PALETTE = False 로 둔다.
+          이걸 안 하면 Ctrl+P 명령 팔레트의 Quit 으로 3연타를 우회할 수 있다.
+        - 시간창은 App 에 주입한 clock 으로 잰다.
+          time.monotonic 을 전역 monkeypatch 하지 마라. Textual timer 와 Toast 가 오염된다.
+        - 종료 시퀀스 규칙
+            시퀀스의 첫 키에서만 attempt() 를 1회 호출한다. 선행 작업 3개가 실제로 트리에 붙는다.
+            두 번째 키는 배너의 카운터를 2/3 으로 갱신만 한다.
+            세 번째 키는 App.exit() 만 호출한다. 여기서 attempt 를 부르지 마라.
+              마지막 갱신이 repaint 전에 종료되어 화면에 안 보인다.
+            1.5초 안에 다음 키가 없으면 카운터와 배너를 리셋한다.
+            리셋 후의 Ctrl+C 는 새 시퀀스이므로 선행 작업 3개를 다시 추가한다. 이건 의도된 동작이다.
+            Ctrl+C 와 Ctrl+Q 는 같은 시간창을 공유한다. 혼합 3연타도 인정한다.
+        - 배너는 ModalScreen 하위 클래스로 만든다.
+            모달 selector 에 align: center top; background: $background 0%;
+            내부 배너에 dock: top; width: 100%; height: 7; overflow: hidden;
+            콘텐츠 6행(카운터 1 + 선행 작업 3 + 분노 변화 1 + 누적 변화 1)에 하단 border 1행이다.
+            선행 작업 문구는 짧게 만들고 줄바꿈 없이 말줄임 처리한다.
+            기본 ModalScreen 은 뒤 화면을 dim 처리하므로 CSS 로 덮어야 한다.
+        - 배너 안에 상태 변화를 복제해서 표시한다. 배경 repaint 에 의존하지 마라.
+            "Ctrl+C 1/3", 새 선행 작업 3개, "분노 86 → 100", "누적 +89분"
+            분노 표시는 상수가 아니라 첫 종료 키 직전과 직후 값으로 계산한다.
+            이미 분노가 100인 상태면 "100 → 100" 이 정상 출력이다.
+        - 카운터는 App 에서 먼저 갱신한다. mount 되지 않은 배너 위젯을 바로 query 하지 마라.
+
+      acceptance criteria
+        - Ctrl+C 한 번으로는 종료되지 않고 배너가 뜬다.
+        - 배너가 뜰 때 트리에 선행 작업 3개가 추가된다.
+        - 1.5초 안에 Ctrl+C 를 세 번 누르면 종료된다.
+        - Ctrl+C, Ctrl+Q, Ctrl+C 혼합 3연타도 종료된다.
+        - 시간창이 만료되면 카운터가 리셋되고 배너가 닫힌다.
+        - 시간창 판정은 주입 clock 을 쓰는 순수 테스트로 검증한다.
+        - 3연타 종료는 run_test() headless 통합 테스트 한 건으로 검증한다.
+        - active_bindings 에 Ctrl+C 와 Ctrl+Q 가 등록되어 있다.
+
+      검증 명령
+        uv run pytest -q
+        uv run ruff check .
+        uv run ruff format --check .
+        ./scripts/check.sh
+
+      실기 확인
+        아래는 headless 로 확정할 수 없다. 실제 터미널에서 확인하고 결과를 남긴다.
+          textual keys 로 사용하는 터미널이 Ctrl+Q 를 전달하는지
+          배너가 떠 있는 동안 priority binding 순서가 기대대로인지
+          80x24 터미널에서 7행 배너의 말줄임 결과
+        20분 안에 배너 표시와 3연타 headless 테스트가 나오지 않으면
+        이 task 를 중단하고 종료 기능을 데모 범위에서 제외한다.
+
+  - title: "stretch: 로컬 JSON 저장과 복원"
+    completed: false
+    description: |
+      목표 (15분, core 3개가 모두 끝나고 검증까지 통과한 뒤에만 시작한다)
+        앱을 껐다 켜도 트리와 분노와 퇴근 시간이 그대로 복원되게 한다.
+        3연타로 겨우 탈출했는데 다시 켜면 그 지옥이 그대로 있다는 것을 보여준다.
+
+      구현 범위
+        - 상태 네 필드만 저장한다. root_task, attempt_count, seed, started_at
+          트리와 파생값은 전부 재계산으로 복원된다. 별도 저장이 필요 없다.
+        - 저장 경로는 프로젝트 루트의 .ralphthon-state.json 으로 하고 .gitignore 에 추가한다.
+        - 파일이 없거나 깨졌으면 조용히 새 상태로 시작한다. 예외를 삼키지 말고 로그는 남긴다.
+
+      acceptance criteria
+        - attempt 후 종료하고 다시 실행하면 같은 트리와 같은 분노와 같은 퇴근 시간이 나온다.
+        - 저장 파일이 없을 때 정상 실행된다.
+        - 저장 파일이 잘못된 JSON 일 때도 정상 실행된다.
+        - tmp_path 픽스처를 쓰는 저장 복원 왕복 테스트가 있다.
+
+      검증 명령
+        uv run pytest -q
+        ./scripts/check.sh
