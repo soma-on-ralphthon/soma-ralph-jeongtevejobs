@@ -300,6 +300,127 @@ async def test_tree_guide_depth_is_two():
         assert pilot.app.query_one("#task-tree", Tree).guide_depth == TREE_GUIDE_DEPTH
 
 
+# --- 키보드 전용 조작 ---------------------------------------------------------
+#
+# PRODUCT.md Success criteria "모든 핵심 행동을 실제 터미널에서
+# 키보드만으로 수행할 수 있다" 의 회귀 잠금.
+# 다른 headless 테스트는 focus() 와 value 대입으로 지름길을 탄다.
+# 그래서 포커스가 트리에 닿지 않거나 Input 이 문자를 잃어도 전부 통과한다.
+# 여기서는 지름길을 쓰지 않고 키 입력만으로 같은 경로를 태운다.
+
+
+async def type_text(pilot, text: str) -> None:
+    """한 글자씩 실제 키로 친다. focus() 도 value 대입도 쓰지 않는다."""
+    for character in text:
+        await pilot.press(character)
+    await pilot.pause()
+
+
+async def test_input_holds_the_focus_on_startup():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        # Assert
+        # 첫 키가 입력창에 들어가야 마우스 없이 작업을 등록할 수 있다.
+        assert pilot.app.focused.id == "task-input"
+
+
+async def test_focus_chain_holds_only_the_two_interactive_widgets():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        # Assert
+        # Tab 정거장이 이 둘뿐이어야 트리까지 한 번에 닿는다.
+        # 포커스를 받는 위젯이 끼어들면 사용자가 Tab 을 몇 번 눌러야 하는지 알 수 없게 된다.
+        assert [widget.id for widget in pilot.app.screen.focus_chain] == ["task-tree", "task-input"]
+
+
+async def test_task_is_registered_with_keystrokes_only():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await type_text(pilot, TASK)
+        await pilot.press("enter")
+        await pilot.pause()
+        tree = pilot.app.query_one("#task-tree", Tree)
+
+        # Assert
+        assert str(tree.root.label) == TASK
+        assert pilot.app.state.attempt_count == 1
+        assert len(tree.root.children) == PREREQ_COUNT
+
+
+async def test_tab_moves_the_focus_to_the_tree_and_back():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await pilot.press("tab")
+        await pilot.pause()
+        on_tree = pilot.app.focused.id
+
+        await pilot.press("shift+tab")
+        await pilot.pause()
+
+        # Assert
+        # 입력창과 트리를 오갈 수 없으면 트리 Enter 경로가 키보드로는 죽은 경로가 된다.
+        assert on_tree == "task-tree"
+        assert pilot.app.focused.id == "task-input"
+
+
+async def test_tree_attempt_is_reachable_with_the_keyboard_alone():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await type_text(pilot, TASK)
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # 입력창 -> 트리로 옮겨 커서를 내리고 그 선행 작업을 시도한다.
+        await pilot.press("tab", "down")
+        await pilot.pause()
+        tree = pilot.app.query_one("#task-tree", Tree)
+        attempted = tree.cursor_node
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # Assert
+        # 트리에서 노드를 고르고 Enter 를 누르는 것도 입력창 Enter 와 같은 attempt 다.
+        assert attempted is not tree.root
+        assert pilot.app.state.attempt_count == 2
+        assert count_nodes(tree.root) == PREREQ_COUNT * 2
+        assert len(attempted.children) == PREREQ_COUNT
+        # 커서는 방금 생긴 첫 선행 작업으로 따라간다.
+        assert tree.cursor_node is attempted.children[0]
+
+
+async def test_letter_keys_are_typed_into_the_input():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+    typed = "quit"
+
+    # Act
+    async with app.run_test() as pilot:
+        await type_text(pilot, typed)
+
+        # Assert
+        # AGENTS.md 의 "q 키를 전역 바인딩으로 만들지 마라" 가 지키려는 결과를 잠근다.
+        # 글자 키는 종료도 다른 action 도 아니고 그대로 입력창에 들어가야 한다.
+        assert pilot.app.query_one("#task-input", Input).value == typed
+        assert pilot.app.focused.id == "task-input"
+        assert pilot.app.is_running
+
+
 # --- 파생값 패널 -------------------------------------------------------------
 
 
