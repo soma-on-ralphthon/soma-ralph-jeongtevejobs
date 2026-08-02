@@ -11,6 +11,7 @@ import pytest
 from ralphthon_sample.config import (
     ANGER_MAX,
     BASE_TIME,
+    CATEGORY_PREREQ_COUNT,
     DEMO_SEED,
     INITIAL_ESTIMATE_MIN,
     NOISE_CLAMP,
@@ -36,8 +37,13 @@ from ralphthon_sample.state import (
 )
 from ralphthon_sample.texts import (
     APOLOGIES,
+    CATEGORIES,
+    DATA_CATEGORY,
+    DEPLOY_CATEGORY,
     PREREQUISITE_TEMPLATES,
+    UI_CATEGORY,
     apology_for,
+    category_for,
     hope_line,
     hope_rate,
     prerequisites_for,
@@ -56,6 +62,24 @@ ANGER_MAX_LATEST_ATTEMPT = 9
 # 이 값이 깨지면 DEMO_SEED 나 수치 모델이 바뀐 것이다.
 # 기댓값 3, 5, 8, 13, 21, 18, 55, 89 와 다른 것은 정상이다. 노이즈가 seed 마다 다르다.
 DEMO_SEED_INCREMENTS = (3, 5, 7, 11, 21, 18, 43, 98)
+
+# 카테고리 판정을 확인할 입력. 앞의 셋은 각 카테고리 키워드를 포함하고 뒤의 둘은 어디에도 안 걸린다.
+UI_TASK = "버튼 색상 변경"
+DEPLOY_TASK = "배포 스크립트 수정"
+DATA_TASK = "주문 테이블 인덱스 추가"
+GENERIC_TASK = "회의록 정리"
+OTHER_GENERIC_TASK = "출장 보고서 작성"
+
+# 카테고리마다 최소로 요구하는 키워드와 문구 개수.
+MIN_CATEGORY_ENTRIES = 6
+
+# DEMO_SEED 와 UI_TASK 1회차의 실제 선행 작업. 구현 뒤 한 번 구해 잠갔다.
+# 순서까지 잠근다. 엉뚱한 한 개가 늘 같은 자리에 오면 그 자체가 규칙으로 읽힌다.
+DEMO_SEED_UI_PREREQUISITES = (
+    "버튼 색상 변경 하기 전에 사라진 환경 변수 담당자 수소문하기",
+    "버튼 색상 변경 하기 전에 다크 모드 팔레트 먼저 맞추기",
+    "버튼 색상 변경 하기 전에 디자인 시스템 토큰 정리하기",
+)
 
 
 def make_state(**overrides) -> YakState:
@@ -384,6 +408,144 @@ def test_prerequisites_differ_across_attempts():
 
     # Assert
     assert len(per_attempt) > 1
+
+
+# --- 선행 작업 카테고리 -------------------------------------------------------
+
+
+def rendered(templates: tuple[str, ...], task: str) -> set[str]:
+    """템플릿 풀을 실제 문구로 바꿔 비교용 집합으로 만든다."""
+    return {template.format(task=task) for template in templates}
+
+
+def drop_task_prefix(lines: tuple[str, ...], task: str) -> set[str]:
+    """작업 이름을 떼어내 어떤 템플릿이 뽑혔는지만 남긴다.
+
+    입력이 다르면 문구도 통째로 달라지므로, 치환 결과를 그대로 비교하면
+    "템플릿이 같은데 이름만 바뀐" 상태를 잡아내지 못한다.
+    """
+    return {line.removeprefix(f"{task} ") for line in lines}
+
+
+def test_every_category_has_enough_keywords_and_templates():
+    # Arrange / Act / Assert
+    for category in CATEGORIES:
+        assert len(category.keywords) >= MIN_CATEGORY_ENTRIES
+        assert len(category.templates) >= MIN_CATEGORY_ENTRIES
+        assert len(set(category.keywords)) == len(category.keywords)
+        assert len(set(category.templates)) == len(category.templates)
+
+
+def test_every_category_template_substitutes_the_task_name():
+    # Arrange / Act / Assert
+    for category in CATEGORIES:
+        assert all("{task}" in template for template in category.templates)
+        assert all("하기 전에" in template for template in category.templates)
+
+
+def test_template_pools_do_not_overlap():
+    """풀이 겹치면 카테고리 2개 + 범용 1개가 같은 문구를 뽑아 중복이 생긴다."""
+    # Arrange
+    pools = [set(category.templates) for category in CATEGORIES]
+    pools.append(set(PREREQUISITE_TEMPLATES))
+
+    # Act
+    merged = set().union(*pools)
+
+    # Assert
+    assert len(merged) == sum(len(pool) for pool in pools)
+
+
+@pytest.mark.parametrize(
+    ("task", "expected"),
+    [
+        (UI_TASK, UI_CATEGORY),
+        ("로그인 화면 여백 조정", UI_CATEGORY),
+        (DEPLOY_TASK, DEPLOY_CATEGORY),
+        ("ci 파이프라인 정리", DEPLOY_CATEGORY),
+        (DATA_TASK, DATA_CATEGORY),
+        ("db 마이그레이션 재작성", DATA_CATEGORY),
+        (GENERIC_TASK, None),
+    ],
+)
+def test_category_for_matches_keywords_case_insensitively(task, expected):
+    # Arrange / Act / Assert
+    assert category_for(task) is expected
+
+
+@pytest.mark.parametrize(
+    ("task", "category"),
+    [
+        (UI_TASK, UI_CATEGORY),
+        (DEPLOY_TASK, DEPLOY_CATEGORY),
+        (DATA_TASK, DATA_CATEGORY),
+    ],
+)
+@pytest.mark.parametrize("attempt_count", range(1, 9))
+def test_categorized_task_mixes_two_related_and_one_unrelated(task, category, attempt_count):
+    """전부 관련 문구면 진짜 할 일처럼 보인다. 한 개는 엉뚱해야 야크 셰이빙이 된다."""
+    # Arrange
+    related = rendered(category.templates, task)
+    generic = rendered(PREREQUISITE_TEMPLATES, task)
+
+    # Act
+    lines = prerequisites_for("test-seed", attempt_count, task)
+
+    # Assert
+    assert sum(line in related for line in lines) == CATEGORY_PREREQ_COUNT
+    assert sum(line in generic for line in lines) == PREREQ_COUNT - CATEGORY_PREREQ_COUNT
+
+
+@pytest.mark.parametrize("attempt_count", range(1, 9))
+def test_uncategorized_task_uses_only_the_generic_pool(attempt_count):
+    # Arrange
+    generic = rendered(PREREQUISITE_TEMPLATES, GENERIC_TASK)
+
+    # Act
+    lines = prerequisites_for("test-seed", attempt_count, GENERIC_TASK)
+
+    # Assert
+    assert set(lines) <= generic
+
+
+@pytest.mark.parametrize("task", [UI_TASK, DEPLOY_TASK, DATA_TASK, GENERIC_TASK])
+def test_prerequisites_stay_distinct_and_name_the_task_in_every_category(task):
+    # Arrange / Act
+    lines = prerequisites_for("test-seed", 3, task)
+
+    # Assert
+    assert len(lines) == PREREQ_COUNT
+    assert len(set(lines)) == PREREQ_COUNT
+    assert all(task in line for line in lines)
+    assert all("{task}" not in line for line in lines)
+
+
+def test_different_tasks_draw_different_templates_at_the_same_attempt():
+    """입력이 뽑기에 영향을 줘야 한다. task 가 시드에 없으면 이름만 바뀐 같은 문구가 나온다."""
+    # Arrange / Act
+    first = prerequisites_for("test-seed", 1, GENERIC_TASK)
+    second = prerequisites_for("test-seed", 1, OTHER_GENERIC_TASK)
+
+    # Assert
+    assert drop_task_prefix(first, GENERIC_TASK) != drop_task_prefix(second, OTHER_GENERIC_TASK)
+
+
+def test_prerequisites_are_pure_for_the_same_seed_task_and_attempt():
+    # Arrange / Act
+    first = prerequisites_for("test-seed", 4, DEPLOY_TASK)
+    second = prerequisites_for("test-seed", 4, DEPLOY_TASK)
+
+    # Assert
+    assert first == second
+
+
+def test_demo_seed_prerequisites_are_locked():
+    # Arrange / Act
+    lines = prerequisites_for(DEMO_SEED, 1, UI_TASK)
+
+    # Assert
+    # 회귀 잠금. 시드 형식이나 템플릿 풀이 바뀌면 여기서 먼저 깨진다.
+    assert lines == DEMO_SEED_UI_PREREQUISITES
 
 
 # --- 사과 문구 ---------------------------------------------------------------

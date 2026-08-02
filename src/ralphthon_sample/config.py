@@ -39,6 +39,10 @@ NEXT_DAY_PREFIX = "익일"
 # attempt 한 번이 만들어내는 선행 작업 개수.
 PREREQ_COUNT = 3
 
+# 입력이 카테고리에 걸렸을 때 그 카테고리 풀에서 뽑는 개수. 나머지는 범용 풀에서 채운다.
+# 셋 다 관련 문구면 농담이 아니라 진짜 할 일 목록처럼 보인다. 한 개는 엉뚱해야 야크 셰이빙이 된다.
+CATEGORY_PREREQ_COUNT = 2
+
 # 사과 Toast 표시 시간(초). 사과는 짧게 지나가야 한다.
 APOLOGY_TIMEOUT_SEC = 1.0
 

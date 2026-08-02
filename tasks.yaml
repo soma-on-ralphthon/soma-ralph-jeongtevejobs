@@ -199,3 +199,89 @@ tasks:
       검증 명령
         uv run pytest -q
         ./scripts/check.sh
+
+  - title: "core 4: 입력에 반응하는 선행 작업"
+    completed: true
+    description: |
+      목표 (18분)
+        지금은 무엇을 입력하든 같은 회차면 같은 선행 작업 3개가 나온다.
+        두 번만 써 보면 들통난다. 입력한 작업에 반응하게 만든다.
+
+      현재 결함
+        texts.py 의 prerequisites_for 가 random.Random(f"{seed}:{attempt_count}") 로
+        템플릿을 고른다. task 문자열이 시드에 들어가지 않아서 입력이 뽑기에 영향을 주지 않는다.
+        "{task}" 치환만 달라질 뿐 문구 3개는 항상 동일하다.
+
+      구현 범위
+        - RNG 시드에 task 를 포함한다. random.Random(f"{seed}:{task}:{attempt_count}")
+          입력이 다르면 다른 문구가 뽑힌다. 순수 함수와 결정성은 그대로 유지된다.
+        - texts.py 에 키워드 분류를 추가한다. 전부 로컬 하드코딩이다. 외부 API 를 쓰지 마라.
+            카테고리 예시 (각 6개 이상)
+              UI      색상, 버튼, 화면, 폰트, 여백, 컴포넌트
+                      -> 디자인 토큰 정리, 접근성 대비 검토, 디자인 시스템 승인
+              배포    배포, CI, 빌드, 파이프라인, 릴리스
+                      -> CI 캐시 원인 파악, 스테이징 재기동 승인, 롤백 절차 문서화
+              데이터  DB, 마이그레이션, 쿼리, 스키마, 인덱스
+                      -> 로컬 DB 복구, 마이그레이션 순서 합의, 백업 확인
+              기타    위 어디에도 안 걸리면 기존 범용 템플릿 풀을 쓴다
+        - 매칭은 부분 문자열 포함으로 충분하다. 형태소 분석기를 쓰지 마라. dependency 금지다.
+        - 카테고리가 걸리면 그 풀에서 2개, 범용 풀에서 1개를 뽑는다.
+          전부 관련 문구면 농담이 아니라 진짜 할 일처럼 보인다.
+          한 개는 엉뚱해야 야크 셰이빙이 된다.
+
+      acceptance criteria
+        - 서로 다른 두 입력이 같은 회차에서 서로 다른 선행 작업 집합을 만든다.
+        - 같은 (seed, task, attempt_count) 는 항상 같은 결과를 낸다. 회귀 테스트로 고정한다.
+        - "버튼 색상 변경" 입력 시 3개 중 최소 2개가 UI 카테고리 문구다.
+        - "배포 스크립트 수정" 입력 시 3개 중 최소 2개가 배포 카테고리 문구다.
+        - 어느 카테고리에도 안 걸리는 입력이 정상 동작한다.
+        - 문구 3개는 여전히 서로 다르고 입력한 작업 이름을 포함한다.
+        - 기존 테스트를 약화하지 마라. 시드 형식이 바뀌어 깨지는 회귀 테스트는
+          새 기대값으로 갱신하되, 단언 자체를 느슨하게 만들지 마라.
+
+      검증 명령
+        uv run pytest -q
+        uv run ruff check .
+        uv run ruff format --check .
+        ./scripts/check.sh
+
+  - title: "core 5: Ctrl+C 종료 바인딩 실기 동작 확정"
+    completed: false
+    description: |
+      목표 (15분)
+        실제 터미널에서 Ctrl+C 가 종료 배너를 띄우지 못한다는 보고가 있다.
+        headless 테스트 11건은 전부 통과하므로 로직이 아니라 바인딩 우선순위 문제다.
+
+      의심 지점
+        Textual 8.2.8 에는 ctrl+c 를 잡는 바인딩이 우리 것 말고 둘 더 있다.
+          textual/app.py:463     Binding("ctrl+c", "help_quit", system=True)
+          textual/screen.py:272  Binding("ctrl+c,super+c", "screen.copy_text")
+        우리 바인딩은 App 레벨 priority=True 라 이론상 이겨야 한다.
+        Screen 의 copy_text 나 system 바인딩이 실제로 먼저 먹는지 확인해야 한다.
+
+      구현 범위
+        - headless 테스트로 바인딩 우선순위를 단언한다.
+          app.active_bindings 에서 "ctrl+c" 가 우리 action(yak_quit)에 연결되는지 확인한다.
+          screen.copy_text 나 help_quit 로 해석되면 실패해야 하는 테스트다.
+        - 텍스트가 선택된 상태에서도 Ctrl+C 가 yak_quit 로 가는지 확인한다.
+          copy_text 는 선택이 있을 때 동작하므로 이 경우가 실제 실패 시나리오다.
+        - 우선순위가 밀린다면 App 레벨에서 Screen 바인딩을 명시적으로 덮는다.
+          on_key 훅으로 event.key == "ctrl+c" 를 가로채 event.prevent_default() 후
+          action_yak_quit 을 호출하는 방식도 가능하다. 최소 변경으로 해결하라.
+        - Ctrl+Q 도 같은 테스트를 붙인다. 둘 중 하나만 되는 상태를 남기지 마라.
+
+      금지
+        - inherit_bindings=False 로 되돌리지 마라. 필요 이상으로 넓다.
+        - time.monotonic 전역 monkeypatch 금지. 주입 clock 을 계속 쓴다.
+        - 기존 종료 테스트 11건을 삭제하거나 약화하지 마라.
+
+      acceptance criteria
+        - active_bindings 에서 ctrl+c 와 ctrl+q 가 모두 yak_quit 에 연결됨을 단언하는 테스트가 있다.
+        - 텍스트 선택 상태에서 Ctrl+C 가 배너를 띄우는 headless 테스트가 있다.
+        - 기존 종료 테스트 11건이 그대로 통과한다.
+        - 실기 확인이 필요한 부분은 .ralphy/progress.txt 에 무엇을 사람이 눌러봐야 하는지 적는다.
+          headless 로 확정할 수 없는 것을 통과했다고 쓰지 마라.
+
+      검증 명령
+        uv run pytest -q -k "quit or binding"
+        ./scripts/check.sh
