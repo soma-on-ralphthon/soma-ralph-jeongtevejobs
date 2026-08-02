@@ -41,7 +41,7 @@ tasks:
         ./scripts/check.sh
 
   - title: "core 2: 반복 attempt와 파생값 4종"
-    completed: false
+    completed: true
     description: |
       목표 (20분)
         Enter 를 반복할 때 증가폭, 분노, 퇴근 시간 표기, 사과 문구, 성공 확률이
