@@ -21,8 +21,11 @@ from ralphthon_sample.config import (
     QUIT_WINDOW_SEC,
     SLUMP_ATTEMPT,
     SLUMP_RATIO,
+    STALLED_LABEL,
+    TICK_INTERVAL_SEC,
 )
 from ralphthon_sample.state import (
+    SECONDS_PER_MINUTE,
     YakState,
     added_minutes,
     anger,
@@ -33,6 +36,8 @@ from ralphthon_sample.state import (
     leave_time_label,
     mult,
     next_quit_press,
+    remaining_label,
+    remaining_seconds,
     total_minutes,
 )
 from ralphthon_sample.texts import (
@@ -318,6 +323,87 @@ def test_leave_label_is_undecided_exactly_when_anger_is_maxed():
 def test_leave_label_shows_the_clock_before_anger_is_maxed():
     # Arrange / Act / Assert
     assert leave_label(DEMO_SEED, 0) == "22:30"
+
+
+# --- 수치 모델: 남은 시간 -----------------------------------------------------
+
+
+def test_tick_config_matches_product_spec():
+    # Arrange / Act / Assert
+    assert TICK_INTERVAL_SEC == 1.0
+    # 완료 개념이 없는 제품이다. 0 에 닿아도 "완료"라고 쓰지 않는다.
+    assert STALLED_LABEL == "곧 끝납니다"
+
+
+def test_remaining_seconds_starts_at_the_whole_estimate():
+    # Arrange / Act / Assert
+    # 아직 아무 시간도 흐르지 않았으면 누적 견적이 통째로 남아 있다.
+    assert remaining_seconds("test-seed", 0, 0) == INITIAL_ESTIMATE_MIN * SECONDS_PER_MINUTE
+
+
+def test_remaining_seconds_counts_down_with_elapsed_time():
+    # Arrange
+    seed = "test-seed"
+    total = total_minutes(seed, 3) * SECONDS_PER_MINUTE
+
+    # Act / Assert
+    for elapsed in (0, 1, 45, 120):
+        assert remaining_seconds(seed, 3, elapsed) == total - elapsed
+
+
+def test_remaining_seconds_truncates_a_fractional_second():
+    # Arrange
+    full = INITIAL_ESTIMATE_MIN * SECONDS_PER_MINUTE
+
+    # Act / Assert
+    # 0.9 초는 아직 1 초가 지난 것이 아니다. 미리 줄면 눈금이 시계보다 앞선다.
+    assert remaining_seconds("test-seed", 0, 0.9) == full
+    assert remaining_seconds("test-seed", 0, 1.0) == full - 1
+
+
+def test_remaining_seconds_never_drops_below_zero():
+    # Arrange
+    seed = "test-seed"
+    total = total_minutes(seed, 2) * SECONDS_PER_MINUTE
+
+    # Act / Assert
+    assert remaining_seconds(seed, 2, total) == 0
+    assert remaining_seconds(seed, 2, total + 10_000) == 0
+
+
+def test_remaining_seconds_jumps_up_after_an_attempt():
+    # Arrange
+    seed = "test-seed"
+    elapsed = 30
+
+    # Act / Assert
+    # 줄어들던 숫자가 attempt 한 번에 튀어오르는 대비가 이 제품의 농담이다.
+    for n in range(0, 8):
+        assert remaining_seconds(seed, n + 1, elapsed) > remaining_seconds(seed, n, elapsed)
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (0, STALLED_LABEL),
+        (1, "1초"),
+        (59, "59초"),
+        (60, "1분 0초"),
+        (61, "1분 1초"),
+        (300, "5분 0초"),
+        (3_661, "61분 1초"),
+    ],
+)
+def test_remaining_label_table(seconds: int, expected: str):
+    # Arrange / Act / Assert
+    assert remaining_label(seconds) == expected
+
+
+def test_remaining_label_stays_stalled_at_and_below_zero():
+    # Arrange / Act / Assert
+    # 바닥에 닿아도 완료되지 않는다. 같은 문구에 고정된다.
+    assert remaining_label(0) == STALLED_LABEL
+    assert remaining_label(-1) == STALLED_LABEL
 
 
 # --- DEMO_SEED --------------------------------------------------------------

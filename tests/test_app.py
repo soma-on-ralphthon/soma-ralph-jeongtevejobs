@@ -21,10 +21,19 @@ from ralphthon_sample.config import (
     QUIT_BANNER_HEIGHT,
     QUIT_SEQUENCE_LENGTH,
     QUIT_WINDOW_SEC,
+    STALLED_LABEL,
     STATE_FILENAME,
     TREE_GUIDE_DEPTH,
 )
-from ralphthon_sample.state import anger, increment, leave_label, total_minutes
+from ralphthon_sample.state import (
+    SECONDS_PER_MINUTE,
+    anger,
+    increment,
+    leave_label,
+    remaining_label,
+    remaining_seconds,
+    total_minutes,
+)
 from ralphthon_sample.texts import apology_for, hope_rate, prerequisites_for
 from ralphthon_sample.widgets.quit_banner import QuitBanner
 
@@ -1155,3 +1164,140 @@ async def test_unwritable_snapshot_path_does_not_break_the_attempt(tmp_path: Pat
         assert pilot.app.is_running
         assert pilot.app.state.attempt_count == 1
         assert count_nodes(pilot.app.query_one("#task-tree", Tree).root) == PREREQ_COUNT
+
+
+# --- 남은 시간 카운트다운 -------------------------------------------------------
+#
+# 남은 시간은 attempt 가 정한 총량 안에서 시계가 깎는다.
+# 시각은 주입 clock 이 준다. time.monotonic 을 전역 monkeypatch 하면 Textual timer 가 오염된다.
+# tick 주기만 짧게 주입해 실제 timer 경로를 태운다. 테스트에서 1초를 실제로 기다리지 않는다.
+
+TEST_TICK_INTERVAL_SEC = 0.02
+TICK_WAIT_SEC = 0.1
+ESTIMATE_PREFIX = "예상 소요 "
+
+
+def countdown_app(clock: FakeClock) -> RalphthonApp:
+    """카운트다운 테스트용 앱. 시계는 테스트가 손으로 민다."""
+    return RalphthonApp(seed=SEED, clock=clock, tick_interval=TEST_TICK_INTERVAL_SEC)
+
+
+async def let_it_tick(pilot) -> None:
+    """타이머가 최소 한 번 돌 때까지 기다린다."""
+    await pilot.pause(TICK_WAIT_SEC)
+
+
+def expected_estimate(attempt_count: int, elapsed: float) -> str:
+    """그 회차와 경과 시간에서 화면에 나와야 하는 문구."""
+    return f"{ESTIMATE_PREFIX}{remaining_label(remaining_seconds(SEED, attempt_count, elapsed))}"
+
+
+async def test_estimate_counts_down_before_the_first_attempt():
+    # Arrange
+    clock = FakeClock()
+    app = countdown_app(clock)
+
+    # Act
+    async with app.run_test() as pilot:
+        clock.advance(65)
+        await let_it_tick(pilot)
+
+        # Assert
+        # 작업을 등록하기 전에도 시계는 간다. 최초 5분은 처음부터 죽은 숫자가 아니다.
+        assert panel_text(pilot, "#estimate") == expected_estimate(0, 65)
+
+
+async def test_estimate_counts_down_while_the_clock_advances():
+    # Arrange
+    clock = FakeClock()
+    app = countdown_app(clock)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        before = panel_text(pilot, "#estimate")
+
+        clock.advance(90)
+        await let_it_tick(pilot)
+
+        # Assert
+        assert before == expected_estimate(1, 0)
+        assert panel_text(pilot, "#estimate") == expected_estimate(1, 90)
+
+
+async def test_estimate_jumps_back_up_after_an_attempt():
+    # Arrange
+    clock = FakeClock()
+    app = countdown_app(clock)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        clock.advance(120)
+        await let_it_tick(pilot)
+        drained = panel_text(pilot, "#estimate")
+
+        await submit_task(pilot, task="")
+
+        # Assert
+        # 줄어들던 숫자가 Enter 한 번에 새 총량으로 튀어오른다. 그 대비가 이 제품의 농담이다.
+        assert drained == expected_estimate(1, 120)
+        assert panel_text(pilot, "#estimate") == expected_estimate(2, 0)
+
+
+async def test_estimate_stalls_at_the_floor_and_never_completes():
+    # Arrange
+    clock = FakeClock()
+    app = countdown_app(clock)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        clock.advance(total_minutes(SEED, 1) * SECONDS_PER_MINUTE + 1)
+        await let_it_tick(pilot)
+        drained = panel_text(pilot, "#estimate")
+
+        clock.advance(10_000)
+        await let_it_tick(pilot)
+
+        # Assert
+        # 바닥에 닿아도 완료되지 않는다. 완료 개념 자체가 이 제품에 없다.
+        assert drained == f"{ESTIMATE_PREFIX}{STALLED_LABEL}"
+        assert panel_text(pilot, "#estimate") == f"{ESTIMATE_PREFIX}{STALLED_LABEL}"
+
+
+async def test_leave_time_ignores_the_elapsed_clock():
+    # Arrange
+    clock = FakeClock()
+    app = countdown_app(clock)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        before = panel_text(pilot, "#leave-time")
+
+        clock.advance(3 * 60 * 60)
+        await let_it_tick(pilot)
+
+        # Assert
+        # 예상 퇴근은 절대 시각이다. 남은 시간과 달리 경과에 따라 움직이면 안 된다.
+        assert before == f"예상 퇴근 {leave_label(SEED, 1)}"
+        assert panel_text(pilot, "#leave-time") == before
+
+
+async def test_anger_and_hope_are_not_driven_by_the_timer():
+    # Arrange
+    clock = FakeClock()
+    app = countdown_app(clock)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        clock.advance(6 * 60 * 60)
+        await let_it_tick(pilot)
+
+        # Assert
+        # 분노와 성공 확률은 attempt 가 구동한다. 타이머에 묶으면 구동 소스 분리가 깨진다.
+        assert pilot.app.state.attempt_count == 1
+        assert pilot.app.query_one("#anger", ProgressBar).progress == anger(SEED, 1)
+        assert f"{hope_rate(1)}%" in panel_text(pilot, "#hope")

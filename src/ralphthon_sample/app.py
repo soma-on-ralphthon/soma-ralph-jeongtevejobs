@@ -23,17 +23,20 @@ from ralphthon_sample.config import (
     PREREQ_COUNT,
     QUIT_SEQUENCE_LENGTH,
     QUIT_WINDOW_SEC,
+    TICK_INTERVAL_SEC,
     TREE_GUIDE_DEPTH,
 )
 from ralphthon_sample.persistence import default_state_path, load_state, save_state
 from ralphthon_sample.state import (
+    SECONDS_PER_MINUTE,
     YakState,
     anger,
     increment,
     leave_label,
     leave_time_label,
     next_quit_press,
-    total_minutes,
+    remaining_label,
+    remaining_seconds,
 )
 from ralphthon_sample.texts import BLOCKED_LABEL, apology_for, hope_line, prerequisites_for
 from ralphthon_sample.widgets.quit_banner import QuitBanner
@@ -44,6 +47,7 @@ INITIAL_ANGER = 0
 INITIAL_ATTEMPT_COUNT = 0
 NO_QUIT_SEQUENCE = 0
 NO_ADDED_MINUTES = 0
+NO_ELAPSED_SECONDS = 0.0
 
 
 class RalphthonApp(App[None]):
@@ -92,6 +96,7 @@ class RalphthonApp(App[None]):
         clock: Callable[[], float] = time.monotonic,
         quit_window: float = QUIT_WINDOW_SEC,
         state_path: Path | None = None,
+        tick_interval: float = TICK_INTERVAL_SEC,
     ) -> None:
         super().__init__()
         self._seed = seed
@@ -100,10 +105,16 @@ class RalphthonApp(App[None]):
         # 상태 스냅샷 경로. 테스트는 임시 디렉터리를 주입한다.
         self._state_path = default_state_path() if state_path is None else state_path
 
-        # 종료 시간창은 주입 clock 으로 잰다.
+        # 종료 시간창과 남은 시간은 같은 주입 clock 으로 잰다.
         # time.monotonic 을 전역 monkeypatch 하면 Textual timer 와 Toast 가 오염된다.
         self._clock = clock
         self._quit_window = quit_window
+
+        # 남은 시간의 기준점. YakState.started_at 이 아니라 주입 clock 으로 잡는다.
+        # started_at 은 벽시계 datetime 이고 주입 clock 은 monotonic float 이라 단위가 섞인다.
+        # 종료 시간창이 이미 monotonic 을 쓰므로 시각 축을 그쪽으로 통일했다.
+        self._tick_interval = tick_interval
+        self._elapsed_origin = clock()
         self._quit_presses = NO_QUIT_SEQUENCE
         self._quit_last_at: float | None = None
         self._quit_banner: QuitBanner | None = None
@@ -116,7 +127,10 @@ class RalphthonApp(App[None]):
             with Vertical(id="status"):
                 yield Static("분노 게이지", id="anger-label")
                 yield ProgressBar(total=ANGER_MAX, show_eta=False, id="anger")
-                yield Static(f"예상 소요 {INITIAL_ESTIMATE_MIN}분", id="estimate")
+                yield Static(
+                    f"예상 소요 {remaining_label(INITIAL_ESTIMATE_MIN * SECONDS_PER_MINUTE)}",
+                    id="estimate",
+                )
                 yield Static(
                     f"예상 퇴근 {leave_time_label(INITIAL_ESTIMATE_MIN)}",
                     id="leave-time",
@@ -130,7 +144,11 @@ class RalphthonApp(App[None]):
         self.query_one("#task-tree", Tree).guide_depth = TREE_GUIDE_DEPTH
         self.query_one("#anger", ProgressBar).update(progress=INITIAL_ANGER)
         self.query_one("#task-input", Input).focus()
+        self._reset_elapsed_origin()
         self._restore_session()
+
+        # 남은 시간만 1초마다 다시 그린다. 분노·사과·성공 확률은 attempt 가 구동한다.
+        self.set_interval(self._tick_interval, self._tick)
 
     # --- 입력 경로 ------------------------------------------------------------
 
@@ -180,9 +198,12 @@ class RalphthonApp(App[None]):
         self.state = state
         self._grow_prerequisites(tree, attempted, state)
 
+        # 남은 시간의 기준점을 지금으로 되돌린다. 그래야 줄어들던 숫자가 새 총량으로 튀어오른다.
+        self._reset_elapsed_origin()
+
         # 구동 소스를 분리한다. 미정 표기는 분노가, 사과와 성공 확률은 회차가 구동한다.
         self._refresh_anger(state)
-        self._refresh_estimate(state)
+        self._refresh_estimate()
         self._refresh_leave_time(state)
         self._refresh_hope(state.attempt_count)
         self._announce_apology(state.attempt_count)
@@ -222,10 +243,17 @@ class RalphthonApp(App[None]):
         progress = anger(state.seed, state.attempt_count)
         self.query_one("#anger", ProgressBar).update(progress=progress)
 
-    def _refresh_estimate(self, state: YakState) -> None:
-        """누적 견적."""
-        minutes = total_minutes(state.seed, state.attempt_count)
-        self.query_one("#estimate", Static).update(f"예상 소요 {minutes}분")
+    def _refresh_estimate(self) -> None:
+        """남은 시간. 총량은 attempt 가 정하고 줄어드는 속도는 시계가 정한다.
+
+        예상 퇴근 시각과 헷갈리지 마라. 저쪽은 절대 시각이라 경과에 움직이지 않는다.
+        """
+        state = self.state
+        seed = self._seed if state is None else state.seed
+        attempt_count = INITIAL_ATTEMPT_COUNT if state is None else state.attempt_count
+
+        seconds = remaining_seconds(seed, attempt_count, self._elapsed_seconds())
+        self.query_one("#estimate", Static).update(f"예상 소요 {remaining_label(seconds)}")
 
     def _refresh_leave_time(self, state: YakState) -> None:
         """예상 퇴근 시각. 분노가 상한이면 leave_label 이 숫자를 포기한다."""
@@ -243,6 +271,24 @@ class RalphthonApp(App[None]):
         if message is not None:
             self.notify(message, timeout=APOLOGY_TIMEOUT_SEC)
 
+    # --- 남은 시간 -------------------------------------------------------------
+
+    def _reset_elapsed_origin(self) -> None:
+        """남은 시간을 재는 기준점을 지금으로 옮긴다."""
+        self._elapsed_origin = self._clock()
+
+    def _elapsed_seconds(self) -> float:
+        """기준점 이후 흐른 초. 주입 clock 이 monotonic 이라 단위는 초다."""
+        return self._clock() - self._elapsed_origin
+
+    def _tick(self) -> None:
+        """1초마다 남은 시간만 다시 그린다.
+
+        여기에 분노·사과·성공 확률을 붙이지 마라. 그 셋은 attempt 가 구동한다.
+        구동 소스를 섞으면 시간이 흐르기만 해도 회차가 오른 것처럼 보인다.
+        """
+        self._refresh_estimate()
+
     # --- 상태 저장과 복원 ------------------------------------------------------
 
     def _restore_session(self) -> None:
@@ -258,7 +304,7 @@ class RalphthonApp(App[None]):
         self.state = state
         self._rebuild_tree(state)
         self._refresh_anger(state)
-        self._refresh_estimate(state)
+        self._refresh_estimate()
         self._refresh_leave_time(state)
         self._refresh_hope(state.attempt_count)
 

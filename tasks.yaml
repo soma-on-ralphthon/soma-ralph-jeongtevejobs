@@ -285,3 +285,62 @@ tasks:
       검증 명령
         uv run pytest -q -k "quit or binding"
         ./scripts/check.sh
+
+  - title: "core 6: 남은 시간이 실시간으로 줄어든다"
+    completed: true
+    description: |
+      목표 (18분)
+        지금 "예상 소요 N분"은 attempt_count 로만 계산돼서 시간이 흘러도 그대로다.
+        죽은 숫자다. 1초마다 줄어들게 만든다.
+        줄어들다가 Enter 한 번에 확 튀어오르는 대비가 이 제품의 핵심 농담인데
+        지금은 정지 상태라 그 농담이 통째로 없다.
+
+      현재 결함
+        YakState.started_at 이 필드로만 존재하고 어디에서도 쓰이지 않는다.
+        app.py 의 _refresh_estimate 는 total_minutes(seed, attempt_count) 를 그대로 표시한다.
+
+      구분해서 다뤄라
+        예상 퇴근 "22:30"  절대 시각이다. 시간이 흘러도 바뀌지 않는 것이 맞다. 건드리지 마라.
+        예상 소요 "5분"    남은 시간이다. 1초마다 줄어야 한다. 이것만 고친다.
+
+      구현 범위
+        - state.py 에 순수 함수를 추가한다.
+            remaining_seconds(seed, attempt_count, elapsed_seconds)
+              = max(0, total_minutes(seed, attempt_count) * 60 - elapsed_seconds)
+            remaining_label(remaining_seconds)
+              1분 이상이면 "N분 M초", 1분 미만이면 "M초", 0이면 STALLED_LABEL
+          elapsed_seconds 를 인자로 받아라. 함수 안에서 시각을 읽으면 순수하지 않아 테스트가 깨진다.
+        - config.py 에 상수를 추가한다.
+            TICK_INTERVAL_SEC = 1.0
+            STALLED_LABEL = "곧 끝납니다"
+        - app.py 에서 on_mount 에 self.set_interval(TICK_INTERVAL_SEC, self._tick) 을 건다.
+          _tick 은 주입 clock 으로 경과 초를 재고 #estimate 만 갱신한다.
+          경과 기준점은 YakState.started_at 이 아니라 App 이 들고 있는 clock 기준 시각으로 잡아라.
+          started_at 은 datetime 이고 주입 clock 은 monotonic 이라 단위가 섞인다.
+          둘 중 하나로 통일하고 무엇을 골랐는지 주석으로 남겨라.
+        - attempt 가 일어나면 기준점을 그 시점으로 재설정한다.
+          그래야 남은 시간이 새 총량으로 튀어오른다.
+        - 남은 시간이 0에 닿으면 STALLED_LABEL 로 고정한다.
+          절대 완료되지 않는다. 완료 개념은 이 제품에 없다.
+
+      금지
+        - time.monotonic 을 전역 monkeypatch 하지 마라. 이미 App 에 주입 clock 이 있다. 그걸 쓴다.
+        - 예상 퇴근 시각을 경과 시간에 따라 움직이지 마라. 절대 시각이다.
+        - 분노, 사과, 성공 확률을 타이머에 묶지 마라. 그 셋은 attempt 가 구동한다.
+        - 타이머 테스트에 실제 sleep 을 쓰지 마라. 주입 clock 을 밀어라.
+
+      acceptance criteria
+        - remaining_seconds 와 remaining_label 순수 함수 표 테스트가 있다.
+          경계값 0초, 59초, 60초, 61초를 포함한다.
+        - 주입 clock 을 앞으로 밀면 #estimate 텍스트가 줄어드는 headless 테스트가 있다.
+        - attempt 직후 남은 시간이 새 total_minutes 로 튀어오르는 테스트가 있다.
+        - 남은 시간이 0이 되면 STALLED_LABEL 이 표시되고 그 아래로 내려가지 않는다.
+        - 예상 퇴근 시각은 경과 시간에 영향받지 않는다. 이를 단언하는 테스트가 있다.
+        - 기존 테스트를 약화하지 마라. #estimate 문구가 바뀌어 깨지는 테스트는
+          새 기대값으로 갱신하되 단언을 느슨하게 만들지 마라.
+
+      검증 명령
+        uv run pytest -q
+        uv run ruff check .
+        uv run ruff format --check .
+        ./scripts/check.sh

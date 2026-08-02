@@ -36,6 +36,14 @@ ANGER_HALF_UP_OFFSET = 5
 UNKNOWN_LEAVE_LABEL = "미정"
 NEXT_DAY_PREFIX = "익일"
 
+# 남은 시간을 다시 그리는 주기(초).
+# 정지된 숫자는 죽은 숫자다. 1초마다 줄어들어야 Enter 한 번에 튀어오르는 대비가 산다.
+TICK_INTERVAL_SEC = 1.0
+
+# 남은 시간이 0에 닿았을 때의 표기.
+# 완료 개념이 없는 제품이므로 "완료"라고 쓰지 않는다. 끝나지 않은 채로 고정된다.
+STALLED_LABEL = "곧 끝납니다"
+
 # attempt 한 번이 만들어내는 선행 작업 개수.
 PREREQ_COUNT = 3
 

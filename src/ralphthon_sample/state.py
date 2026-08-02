@@ -22,14 +22,19 @@ from ralphthon_sample.config import (
     NOISE_SIGMA,
     SLUMP_ATTEMPT,
     SLUMP_RATIO,
+    STALLED_LABEL,
     UNKNOWN_LEAVE_LABEL,
 )
 
 MINUTES_PER_HOUR = 60
 MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR
+SECONDS_PER_MINUTE = 60
 
 # 증가폭 하한. 노이즈가 아무리 낮아도 0분짜리 야크는 없다.
 MIN_INCREMENT = 1
+
+# 남은 시간의 바닥. 견적이 음수로 내려가는 대신 여기서 멈춘다.
+NO_REMAINING_SECONDS = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +130,31 @@ def leave_time_label(total_minutes_value: int) -> str:
     if day_offset == 0:
         return clock
     return f"{NEXT_DAY_PREFIX} {clock}"
+
+
+def remaining_seconds(seed: str, attempt_count: int, elapsed_seconds: float) -> int:
+    """이번 회차의 누적 견적에서 흘러간 만큼을 뺀 남은 시간(초).
+
+    경과 시간을 인자로 받는다. 함수 안에서 시계를 읽으면 순수하지 않아 재현되지 않는다.
+    총량은 attempt 가 정하고 줄어드는 속도만 시계가 정한다. 회차가 오르면 남은 시간이 튀어오른다.
+    소수점은 버린다. 0.9 초는 아직 1 초가 지난 것이 아니다.
+    """
+    total = total_minutes(seed, attempt_count) * SECONDS_PER_MINUTE
+    return max(NO_REMAINING_SECONDS, total - int(elapsed_seconds))
+
+
+def remaining_label(remaining: int) -> str:
+    """남은 시간 표기. 1분 미만이면 초만 쓴다.
+
+    바닥에 닿으면 STALLED_LABEL 로 고정된다. 완료 개념이 없으니 0초를 완료로 읽히게 두지 않는다.
+    """
+    if remaining <= NO_REMAINING_SECONDS:
+        return STALLED_LABEL
+
+    minutes, seconds = divmod(remaining, SECONDS_PER_MINUTE)
+    if minutes == 0:
+        return f"{seconds}초"
+    return f"{minutes}분 {seconds}초"
 
 
 def leave_label(seed: str, attempt_count: int) -> str:
