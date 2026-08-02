@@ -4,6 +4,8 @@ Textual 의 run_test() 로 실제 키 입력 경로를 태운다.
 파생값 계산은 test_state.py 의 순수 함수 테스트가 담당한다.
 """
 
+from pathlib import Path
+
 from textual.widgets import Input, ProgressBar, Static, Tree
 
 from ralphthon_sample.app import RalphthonApp
@@ -14,6 +16,7 @@ from ralphthon_sample.config import (
     QUIT_BANNER_HEIGHT,
     QUIT_SEQUENCE_LENGTH,
     QUIT_WINDOW_SEC,
+    STATE_FILENAME,
     TREE_GUIDE_DEPTH,
 )
 from ralphthon_sample.state import anger, increment, leave_label, total_minutes
@@ -561,3 +564,144 @@ async def test_quit_sequence_survives_an_empty_session():
         # 작업을 등록하기 전에도 한 번의 Ctrl+C 로는 빠져나갈 수 없다.
         assert pilot.app.is_running
         assert isinstance(pilot.app.screen, QuitBanner)
+
+
+# --- 상태 저장과 복원 ---------------------------------------------------------
+
+
+def tree_labels(node) -> list[str]:
+    """루트를 뺀 전체 자손 라벨. 트리 모양까지 비교하려고 깊이 우선으로 훑는다."""
+    labels: list[str] = []
+    for child in node.children:
+        labels.append(str(child.label))
+        labels.extend(tree_labels(child))
+    return labels
+
+
+def session_fingerprint(pilot) -> tuple:
+    """화면에 보이는 것 전부. 껐다 켠 뒤 이 값이 같아야 복원된 것이다."""
+    tree = pilot.app.query_one("#task-tree", Tree)
+    return (
+        str(tree.root.label),
+        tree_labels(tree.root),
+        pilot.app.query_one("#anger", ProgressBar).progress,
+        panel_text(pilot, "#estimate"),
+        panel_text(pilot, "#leave-time"),
+        panel_text(pilot, "#hope"),
+    )
+
+
+async def test_attempt_writes_a_snapshot(tmp_path: Path):
+    # Arrange
+    path = tmp_path / STATE_FILENAME
+    app = RalphthonApp(seed=SEED, state_path=path)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+
+        # Assert
+        assert path.exists()
+
+
+async def test_restart_restores_the_same_tree_and_panels(tmp_path: Path):
+    # Arrange
+    path = tmp_path / STATE_FILENAME
+    async with RalphthonApp(seed=SEED, state_path=path).run_test() as pilot:
+        await submit_task(pilot)
+        await submit_task(pilot, task="")
+        await submit_task(pilot, task="")
+        before = session_fingerprint(pilot)
+
+    # Act
+    # 저장된 seed 로 복원되는지 보려고 일부러 다른 seed 로 다시 띄운다.
+    async with RalphthonApp(seed="다른-seed", state_path=path).run_test() as pilot:
+        after = session_fingerprint(pilot)
+
+        # Assert
+        # 3연타로 겨우 탈출했는데 다시 켜면 그 지옥이 그대로 있다.
+        assert pilot.app.state.attempt_count == 3
+        assert pilot.app.state.seed == SEED
+        assert count_nodes(pilot.app.query_one("#task-tree", Tree).root) == PREREQ_COUNT * 3
+    assert after == before
+
+
+async def test_restored_session_continues_the_chain(tmp_path: Path):
+    # Arrange
+    path = tmp_path / STATE_FILENAME
+    async with RalphthonApp(seed=SEED, state_path=path).run_test() as pilot:
+        await submit_task(pilot)
+        await submit_task(pilot, task="")
+
+    # Act
+    async with RalphthonApp(seed=SEED, state_path=path).run_test() as pilot:
+        await press_enter_on_tree(pilot)
+        tree = pilot.app.query_one("#task-tree", Tree)
+
+        # Assert
+        # 복원된 커서가 마지막 선행 작업에 있어야 무한 후퇴가 끊기지 않고 이어진다.
+        assert pilot.app.state.attempt_count == 3
+        assert count_nodes(tree.root) == PREREQ_COUNT * 3
+        assert str(tree.cursor_node.label) == prerequisites_for(SEED, 3, TASK)[0]
+
+
+async def test_quit_sequence_attempt_survives_a_restart(tmp_path: Path):
+    # Arrange
+    path = tmp_path / STATE_FILENAME
+    async with RalphthonApp(seed=SEED, state_path=path).run_test() as pilot:
+        await submit_task(pilot)
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+
+    # Act
+    async with RalphthonApp(seed=SEED, state_path=path).run_test() as pilot:
+        # Assert
+        # 종료 키가 만든 8회차도 저장된다. 다시 켜도 분노는 내려가지 않는다.
+        assert pilot.app.state.attempt_count == 2
+        assert count_nodes(pilot.app.query_one("#task-tree", Tree).root) == PREREQ_COUNT * 2
+
+
+async def test_restart_without_a_snapshot_starts_fresh(tmp_path: Path):
+    # Arrange
+    path = tmp_path / STATE_FILENAME
+    app = RalphthonApp(seed=SEED, state_path=path)
+
+    # Act
+    async with app.run_test() as pilot:
+        # Assert
+        assert pilot.app.state is None
+        assert len(pilot.app.query_one("#task-tree", Tree).root.children) == 0
+        assert f"{INITIAL_ESTIMATE_MIN}분" in panel_text(pilot, "#estimate")
+
+
+async def test_restart_with_a_broken_snapshot_starts_fresh(tmp_path: Path):
+    # Arrange
+    path = tmp_path / STATE_FILENAME
+    path.write_text("{이건 JSON 이 아니다", encoding="utf-8")
+    app = RalphthonApp(seed=SEED, state_path=path)
+
+    # Act
+    async with app.run_test() as pilot:
+        # Assert
+        # 깨진 파일 때문에 앱이 죽으면 안 된다. 조용히 새 상태로 시작한다.
+        assert pilot.app.is_running
+        assert pilot.app.state is None
+        assert "22:30" in panel_text(pilot, "#leave-time")
+
+
+async def test_unwritable_snapshot_path_does_not_break_the_attempt(tmp_path: Path):
+    # Arrange
+    # 디렉터리를 저장 경로로 주면 쓰기가 반드시 실패한다.
+    path = tmp_path / STATE_FILENAME
+    path.mkdir()
+    app = RalphthonApp(seed=SEED, state_path=path)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+
+        # Assert
+        # 저장은 부가 기능이다. 실패해도 attempt 자체는 그대로 굴러가야 한다.
+        assert pilot.app.is_running
+        assert pilot.app.state.attempt_count == 1
+        assert count_nodes(pilot.app.query_one("#task-tree", Tree).root) == PREREQ_COUNT

@@ -6,6 +6,7 @@ Textual App, 화면 구성, 키 바인딩만 담당한다.
 
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -24,6 +25,7 @@ from ralphthon_sample.config import (
     QUIT_WINDOW_SEC,
     TREE_GUIDE_DEPTH,
 )
+from ralphthon_sample.persistence import default_state_path, load_state, save_state
 from ralphthon_sample.state import (
     YakState,
     anger,
@@ -89,10 +91,14 @@ class RalphthonApp(App[None]):
         seed: str = DEMO_SEED,
         clock: Callable[[], float] = time.monotonic,
         quit_window: float = QUIT_WINDOW_SEC,
+        state_path: Path | None = None,
     ) -> None:
         super().__init__()
         self._seed = seed
         self.state: YakState | None = None
+
+        # 상태 스냅샷 경로. 테스트는 임시 디렉터리를 주입한다.
+        self._state_path = default_state_path() if state_path is None else state_path
 
         # 종료 시간창은 주입 clock 으로 잰다.
         # time.monotonic 을 전역 monkeypatch 하면 Textual timer 와 Toast 가 오염된다.
@@ -124,6 +130,7 @@ class RalphthonApp(App[None]):
         self.query_one("#task-tree", Tree).guide_depth = TREE_GUIDE_DEPTH
         self.query_one("#anger", ProgressBar).update(progress=INITIAL_ANGER)
         self.query_one("#task-input", Input).focus()
+        self._restore_session()
 
     # --- 입력 경로 ------------------------------------------------------------
 
@@ -176,15 +183,23 @@ class RalphthonApp(App[None]):
         self._refresh_leave_time(state)
         self._refresh_hope(state.attempt_count)
         self._announce_apology(state.attempt_count)
+        self._save_session(state)
 
     # --- 트리 ----------------------------------------------------------------
 
     def _grow_prerequisites(self, tree: Tree, attempted: TreeNode[None], state: YakState) -> None:
-        """시도한 작업 아래에 선행 작업을 붙이고 커서를 첫 선행 작업으로 옮긴다.
+        """시도한 작업 아래에 이번 회차의 선행 작업을 붙인다."""
+        lines = prerequisites_for(state.seed, state.attempt_count, state.root_task)
+        self._attach_prerequisites(tree, attempted, lines)
+
+    def _attach_prerequisites(
+        self, tree: Tree, attempted: TreeNode[None], lines: tuple[str, ...]
+    ) -> TreeNode[None]:
+        """선행 작업을 붙이고 커서를 첫 선행 작업으로 옮긴 뒤 그 노드를 돌려준다.
 
         select_node() 를 쓰지 마라. NodeSelected 를 다시 발행해 attempt 가 연쇄 호출된다.
         """
-        for line in prerequisites_for(state.seed, state.attempt_count, state.root_task):
+        for line in lines:
             attempted.add_leaf(line)
         attempted.expand()
 
@@ -195,6 +210,7 @@ class RalphthonApp(App[None]):
         newest = attempted.children[-PREREQ_COUNT]
         tree.move_cursor(newest)
         tree.scroll_to_node(newest, animate=False)
+        return newest
 
     # --- 상태 패널 ------------------------------------------------------------
 
@@ -223,6 +239,49 @@ class RalphthonApp(App[None]):
         message = apology_for(attempt_count)
         if message is not None:
             self.notify(message, timeout=APOLOGY_TIMEOUT_SEC)
+
+    # --- 상태 저장과 복원 ------------------------------------------------------
+
+    def _restore_session(self) -> None:
+        """저장된 상태가 있으면 트리와 세 패널을 그대로 되살린다.
+
+        3연타로 겨우 탈출했는데 다시 켜면 그 지옥이 그대로 있다.
+        저장된 값은 네 필드뿐이므로 나머지는 전부 여기서 재계산한다.
+        """
+        state = load_state(self._state_path)
+        if state is None:
+            return
+
+        self.state = state
+        self._rebuild_tree(state)
+        self._refresh_anger(state)
+        self._refresh_estimate(state)
+        self._refresh_leave_time(state)
+        self._refresh_hope(state.attempt_count)
+
+    def _rebuild_tree(self, state: YakState) -> None:
+        """회차마다 붙었던 선행 작업을 1회차부터 다시 쌓는다.
+
+        커서는 언제나 직전 회차의 첫 선행 작업에 있었다. 그 자리를 그대로 복원해야
+        복원 후의 Enter 가 끊긴 자리가 아니라 이어지는 자리에 선행 작업을 붙인다.
+        """
+        tree = self.query_one("#task-tree", Tree)
+        tree.reset(state.root_task)
+
+        attempted = tree.root
+        for attempt_count in range(1, state.attempt_count + 1):
+            lines = prerequisites_for(state.seed, attempt_count, state.root_task)
+            attempted = self._attach_prerequisites(tree, attempted, lines)
+
+    def _save_session(self, state: YakState) -> None:
+        """이번 attempt 를 파일에 남긴다.
+
+        저장은 부가 기능이다. 실패해도 로그만 남기고 attempt 자체는 그대로 굴러간다.
+        """
+        try:
+            save_state(state, self._state_path)
+        except OSError as error:
+            self.log.warning(f"상태를 저장하지 못했다: {self._state_path} ({error!r})")
 
     # --- 종료 시퀀스 ----------------------------------------------------------
 

@@ -178,7 +178,7 @@ tasks:
         이 task 를 중단하고 종료 기능을 데모 범위에서 제외한다.
 
   - title: "stretch: 로컬 JSON 저장과 복원"
-    completed: false
+    completed: true
     description: |
       목표 (15분, core 3개가 모두 끝나고 검증까지 통과한 뒤에만 시작한다)
         앱을 껐다 켜도 트리와 분노와 퇴근 시간이 그대로 복원되게 한다.
