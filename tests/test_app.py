@@ -203,6 +203,64 @@ async def test_empty_enter_after_registration_is_another_attempt():
         assert pilot.app.state.attempt_count == 2
 
 
+async def test_typing_another_task_after_registration_is_another_attempt():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        await submit_task(pilot)
+        await submit_task(pilot, task="완전히 다른 작업")
+        tree = pilot.app.query_one("#task-tree", Tree)
+
+        # Assert
+        # 최초 등록 후에는 무엇을 적고 Enter 를 눌러도 결과가 같다. 활성 작업 재시도다.
+        # 루트를 갈아치우면 트리가 통째로 날아가 무한 후퇴가 끊긴다.
+        assert pilot.app.state.root_task == TASK
+        assert TASK in str(tree.root.label)
+        assert pilot.app.state.attempt_count == 2
+        assert count_nodes(tree.root) == PREREQ_COUNT * 2
+
+
+async def test_typing_another_task_never_lowers_the_anger():
+    # Arrange
+    app = RalphthonApp(seed=SEED)
+
+    # Act
+    async with app.run_test() as pilot:
+        for _ in range(5):
+            await submit_task(pilot)
+        before = pilot.app.query_one("#anger", ProgressBar).progress
+
+        await submit_task(pilot, task="퇴근하기")
+        after = pilot.app.query_one("#anger", ProgressBar).progress
+
+        # Assert
+        # 입력창으로 분노를 되돌릴 수 있으면 제품이 무너진다. 탈출구를 만들지 마라.
+        assert before == anger(SEED, 5)
+        assert after == anger(SEED, 6)
+        assert after > before
+
+
+async def test_typing_another_task_cannot_wipe_a_restored_session(tmp_path: Path):
+    # Arrange
+    path = tmp_path / STATE_FILENAME
+    async with RalphthonApp(seed=SEED, state_path=path).run_test() as pilot:
+        await submit_task(pilot)
+        await submit_task(pilot, task="")
+
+    # Act
+    async with RalphthonApp(seed=SEED, state_path=path).run_test() as pilot:
+        await submit_task(pilot, task="이번엔 진짜 새 작업")
+        tree = pilot.app.query_one("#task-tree", Tree)
+
+        # Assert
+        # 다시 켜도 그 지옥이 그대로 있어야 한다. 입력창이 초기화 버튼이 되면 안 된다.
+        assert pilot.app.state.root_task == TASK
+        assert pilot.app.state.attempt_count == 3
+        assert count_nodes(tree.root) == PREREQ_COUNT * 3
+
+
 async def test_cursor_moves_to_the_first_new_prerequisite():
     # Arrange
     app = RalphthonApp(seed=SEED)

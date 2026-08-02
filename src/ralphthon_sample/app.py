@@ -135,19 +135,22 @@ class RalphthonApp(App[None]):
     # --- 입력 경로 ------------------------------------------------------------
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        """입력창 Enter. 새 작업이면 등록하고, 등록 후의 빈 Enter 는 활성 작업 재시도다."""
+        """입력창 Enter. 최초 등록만 작업을 세우고, 그 뒤로는 무엇을 적든 활성 작업 재시도다."""
         task = event.value.strip()
         event.input.value = ""
 
-        if not task:
-            # 아직 등록된 작업이 없으면 _attempt 가 조용히 빠져나간다.
+        if self.state is not None:
+            # 등록이 끝나면 입력 내용은 결과를 바꾸지 않는다. 빈 Enter 와 똑같은 attempt 다.
+            # 다른 작업을 적었다고 루트를 갈아치우면 트리와 분노가 초기화되어
+            # 입력창이 곧 탈출구가 된다. 사용자가 분노를 낮출 수 있으면 제품이 무너진다.
             self._attempt()
             return
 
-        fresh_root = None
-        if self.state is None or task != self.state.root_task:
-            fresh_root = self._start_task(task)
-        self._attempt(fresh_root)
+        if not task:
+            # 아직 등록된 작업이 없다. 빈 줄로는 아무것도 시작하지 않는다.
+            return
+
+        self._attempt(self._start_task(task))
 
     def on_tree_node_selected(self, event: Tree.NodeSelected[None]) -> None:
         """트리 Enter. 입력창 Enter 와 같은 attempt 경로를 탄다."""
